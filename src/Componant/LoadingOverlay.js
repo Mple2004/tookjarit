@@ -2,29 +2,29 @@ import React, { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Search, BrainCircuit, Sparkles, CheckCircle2, Loader2 } from "lucide-react";
 
-const STEPS = [
-  {
-    id: 1,
-    label: "Fetching Data",
-    subLabel: "กำลังดึงข้อมูลจาก TikTok...",
-    icon: Search,
-  },
-  {
-    id: 2,
-    label: "AI Analyzing",
-    subLabel: "Gemini กำลังวิเคราะห์ความ 'ถูกจริต'...",
-    icon: BrainCircuit,
-  },
-  {
-    id: 3,
-    label: "Finalizing",
-    subLabel: "สรุปผลและจับคู่...",
-    icon: Sparkles,
-  },
-];
-
-export default function LoadingOverlay({ isLoading }) {
+export default function LoadingOverlay({ isLoading,platform = "tiktok"}) {
   const [currentStep, setCurrentStep] = useState(1);
+
+  const STEPS = [
+    {
+      id: 1,
+      label: "Fetching Data",
+      subLabel: `กำลังดึงข้อมูลจาก ${platform === "youtube" ? "YouTube" : "TikTok"}...`,
+      icon: Search,
+    },
+    {
+      id: 2,
+      label: "AI Analyzing",
+      subLabel: "Gemini กำลังวิเคราะห์ความ 'ถูกจริต'...",
+      icon: BrainCircuit,
+    },
+    {
+      id: 3,
+      label: "Finalizing",
+      subLabel: "สรุปผลและจับคู่...",
+      icon: Sparkles,
+    },
+  ];
 
   useEffect(() => {
     if (isLoading) {

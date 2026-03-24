@@ -3,7 +3,7 @@ import { useRef, useCallback } from 'react';
 const API = 'http://localhost:5000';
 const PLACEHOLDER = 'https://cdn-icons-png.flaticon.com/512/847/847969.png';
 
-export function useAvatarCache(fgRef) {
+export function useAvatarCache(fgRef, platform = 'tiktok') {
     const imgCache = useRef({});
     const fetching = useRef({});
 
@@ -12,7 +12,7 @@ export function useAvatarCache(fgRef) {
         if (imgCache.current[name] || fetching.current[name]) return;
         fetching.current[name] = true;
 
-        fetch(`${API}/api/avatar/${encodeURIComponent(name)}`)
+        fetch(`${API}/api/avatar/${encodeURIComponent(name)}?platform=${platform}`)
             .then(r => r.json())
             .then(({ avatar }) => {
                 const img = new Image();

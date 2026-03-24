@@ -46,14 +46,39 @@ export function useGraphData() {
     }, []);
 
     // ค้นหาด้วย keyword หรือ @channel (ต่างจาก TikTok ที่ใช้ hashtag)
-    const searchYoutube = useCallback(async (keyword) => {
+    const searchYoutube = useCallback(async (input) => {
+        if (!input?.trim()) return;
+
+        // ถ้าใส่ @ชื่อ → ต้องบอก user ว่าต้องใช้ channelId จริงๆ
+        // ถ้าขึ้นต้นด้วย UC → เป็น channelId โดยตรง
+        const channelId = input.trim().startsWith('@')
+            ? input.trim()          // ส่งไปให้ backend จัดการ (เพิ่ม logic ได้ทีหลัง)
+            : input.trim();         // channelId เช่น UCxxxxxx
+
         setIsLoading(true);
         try {
-            await fetch(`${API}/api/search-youtube`, {
+            const token = localStorage.getItem('token');
+            const res = await fetch(`${API}/api/search-youtube`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ keyword, limit: 5 }),
+                headers: {
+                    'Content-Type': 'application/json',
+                    // ✅ ส่ง token เพราะ server.js ใช้ authMiddleware
+                    ...(token && { Authorization: `Bearer ${token}` }),
+                },
+                // ✅ แก้: ส่ง channelId และ max (ไม่ใช่ keyword/limit)
+                body: JSON.stringify({ search: input.trim(), max: 5 }),
             });
+
+            if (res.status === 401) {
+                alert('กรุณาเข้าสู่ระบบก่อนค้นหา');
+                return;
+            }
+            if (!res.ok) {
+                const err = await res.json();
+                alert(`เกิดข้อผิดพลาด: ${err.error || 'Unknown error'}`);
+                return;
+            }
+
             await loadGraphData();
         } catch {
             alert('เกิดข้อผิดพลาดในการค้นหา YouTube');
@@ -62,9 +87,21 @@ export function useGraphData() {
         }
     }, [loadGraphData]);
 
+    // ✅ แก้: เรียก YouTube sync endpoint (ไม่ใช่ TikTok)
     const syncDB = useCallback(async () => {
-        await fetch(`${API}/api/sync-mongo-to-neo4j`);
-        await loadGraphData();
+        const token = localStorage.getItem('token');
+        try {
+            await fetch(`${API}/api/youtube-sync-neo4j`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(token && { Authorization: `Bearer ${token}` }),
+                },
+            });
+            await loadGraphData();
+        } catch (err) {
+            console.error('❌ Sync error:', err);
+        }
     }, [loadGraphData]);
 
     return { data, isLoading, loadGraphData, searchYoutube, syncDB };

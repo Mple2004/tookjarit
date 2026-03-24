@@ -456,7 +456,7 @@ function TikTokAnalysis() {
     return (
         <div className="analysis-page">
             <style>{`@keyframes tooltipIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }`}</style>
-            <LoadingOverlay isLoading={isLoading} />
+            <LoadingOverlay isLoading={isLoading} platform="tiktok" />
 
             <div className="analysis-header-container">
                 <button className="back-to-platform-btn" onClick={() => navigate('/analysis')}>← เลือก Platform</button>

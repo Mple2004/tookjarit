@@ -29,12 +29,97 @@ function getNodeSize(node) {
     if (!count) return 25;
     return Math.min(Math.max(Math.log(count) * 4 + 10, 25), 80);
 }
-function getLinkWidth(link) {
+function getLinkWidth(link, allLinks) {
     if (link.isPhantom) return 0;
-    // YouTube ให้ weight กับ views มากกว่า likes
-    const score = (link.totalViews || 0) * 1.5 + (link.totalLikes || 0) + ((link.source?.subscribers || 0) * 0.3);
-    return 2 + (Math.min(score, 500000) / 500000) * 10;
+    if (!allLinks || allLinks.length === 0) return 1.5;
+    const rating = calcRating(link, allLinks);
+    return 1.5 + (rating / 10) * 6.5; // range 1.5 - 8 เหมือน TikTok
 }
+
+// function
+function calcRawScore(link) {
+    return (link.totalViews || 0) * 0.1 + (link.totalLikes || 0) * 0.4 +
+           (link.totalComments || 0) * 0.3 ;
+}
+function calcRating(link, allLinks) {
+    const brandId = typeof link.target === 'object' ? link.target.id : link.target;
+    const sameBrand = allLinks.filter(l => {
+        if (l.isPhantom) return false;
+        const t = typeof l.target === 'object' ? l.target.id : l.target;
+        return t === brandId;
+    });
+    const maxRaw = Math.max(...sameBrand.map(calcRawScore), 1);
+    return (calcRawScore(link) / maxRaw) * 10;
+}
+function getTier(subscribers) {
+    if (!subscribers) return { label: 'Unknown', color: '#b2bec3' };
+    if (subscribers >= 1_000_000) return { label: '👑 Mega', color: '#6c5ce7' };
+    if (subscribers >= 100_000)   return { label: '🔥 Macro', color: '#e17055' };
+    if (subscribers >= 50_000)    return { label: '⚡ Mid-Tier', color: '#f39c12' };
+    if (subscribers >= 10_000)    return { label: '✨ Micro', color: '#00b894' };
+    if (subscribers >= 1_000)     return { label: '🌱 Nano', color: '#74b9ff' };
+    return { label: '🔰 New', color: '#b2bec3' };
+}
+function fmtNum(n) {
+    if (!n || n === 0) return '-';
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+    if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'K';
+    return n.toLocaleString();
+}
+function LinkTooltip({ link, pos, allLinks }) {
+    if (!link || !pos) return null;
+
+    const subscribers = typeof link.source === 'object' 
+        ? link.source.subscribers || link.source.followers : 0;
+    const tier = getTier(subscribers);
+    const rating = calcRating(link, allLinks);
+    const brandName = typeof link.target === 'object' ? link.target.name : link.target;
+    const infName = typeof link.source === 'object' ? link.source.name : link.source;
+    const engage = (link.totalLikes || 0) + (link.totalComments || 0);
+    const ratingColor = rating >= 7.5 ? '#00b894' : rating >= 5 ? '#f39c12' : '#e17055';
+
+    return (
+        <div style={{
+            position: 'absolute',
+            left: pos.x + 16, top: pos.y - 10,
+            background: 'rgba(15,15,25,0.92)',
+            backdropFilter: 'blur(8px)',
+            border: '1px solid rgba(255,255,255,0.12)',
+            borderRadius: 14, padding: '10px 14px',
+            minWidth: 175, pointerEvents: 'none',
+            zIndex: 99999, boxShadow: '0 8px 32px rgba(0,0,0,0.35)',
+            fontFamily: "'Prompt', sans-serif",
+            animation: 'tooltipIn 0.15s ease',
+        }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#fff', marginBottom: 8, whiteSpace: 'nowrap' }}>
+                {infName}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 20, marginBottom: 4 }}>
+                <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)' }}>🛍️ Brand</span>
+                <span style={{ fontSize: 11, fontWeight: 600, color: '#fff' }}>{brandName}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 20, marginBottom: 4 }}>
+                <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)' }}>⭐ Rating</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: ratingColor }}>
+                    {rating.toFixed(1)} / 10
+                </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 20, marginBottom: 4 }}>
+                <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)' }}>👁️ Views</span>
+                <span style={{ fontSize: 11, fontWeight: 600, color: '#fff' }}>{fmtNum(link.totalViews)}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 20, marginBottom: 4 }}>
+                <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)' }}>❤️ Engage</span>
+                <span style={{ fontSize: 11, fontWeight: 600, color: '#fff' }}>{fmtNum(engage)}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 20 }}>
+                <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)' }}>🎖️ Tier</span>
+                <span style={{ fontSize: 11, fontWeight: 600, color: tier.color }}>{tier.label}</span>
+            </div>
+        </div>
+    );
+}
+
 
 // ─── Main Component ─────────────────────────────────────────────────────────
 function YoutubeAnalysis() {
@@ -46,7 +131,7 @@ function YoutubeAnalysis() {
 
     const { data, isLoading, loadGraphData, searchYoutube, syncDB } = useGraphData();
     const { highlightNodes, highlightLinks, hoverNode, setHoverNode, updateHighlights, clearHighlights } = useHighlight(data.links);
-    const { imgCache, loadAvatarForNode } = useAvatarCache(fgRef);
+    const { imgCache, loadAvatarForNode } = useAvatarCache(fgRef, 'youtube');
 
     const [dimensions, setDimensions]       = useState({ width: 800, height: 600 });
     const [isFullScreen, setIsFullScreen]   = useState(false);
@@ -57,6 +142,35 @@ function YoutubeAnalysis() {
 
     const [favorites, setFavorites]   = useState(new Set());
     const [favLoading, setFavLoading] = useState(false);
+
+    const [hoverLink, setHoverLink] = useState(null);
+    const [linkTooltipPos, setLinkTooltipPos] = useState(null);
+
+    const handleLinkHover = useCallback((link, prevLink, event) => {
+        if (link && !link.isPhantom) {
+            setHoverLink(link);
+            if (event) {
+                const rect = containerRef.current?.getBoundingClientRect();
+                if (rect) setLinkTooltipPos({ x: event.clientX - rect.left, y: event.clientY - rect.top });
+            }
+        } else {
+            setHoverLink(null);
+            setLinkTooltipPos(null);
+        }
+    }, []);
+
+    useEffect(() => {
+        const canvas = containerRef.current?.querySelector('canvas');
+        if (!canvas) return;
+        const onMove = (e) => {
+            if (!hoverLink) return;
+            const rect = containerRef.current.getBoundingClientRect();
+            setLinkTooltipPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+        };
+        canvas.addEventListener('mousemove', onMove);
+        return () => canvas.removeEventListener('mousemove', onMove);
+    }, [hoverLink]);
+
 
     // ── Load initial data ──────────────────────────────────────────────────
     useEffect(() => { loadGraphData(); }, [loadGraphData]);
@@ -179,6 +293,8 @@ function YoutubeAnalysis() {
         }
     }, [localFilter, data.nodes]);
 
+
+
     // ── Graph Interaction ──────────────────────────────────────────────────
     const handleNodeHover = (node) => {
         if (selectedNode || localFilter) return;
@@ -267,7 +383,11 @@ function YoutubeAnalysis() {
     // ── Render ─────────────────────────────────────────────────────────────
     return (
         <div className="analysis-page">
-            <LoadingOverlay isLoading={isLoading} />
+            <style>{`@keyframes tooltipIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }`}</style>
+            <LoadingOverlay 
+            isLoading={isLoading} 
+            platform="youtube" // ส่งค่า "youtube" เข้าไป
+            />
 
             {/* Header */}
             <div className="analysis-header-container">
@@ -281,20 +401,28 @@ function YoutubeAnalysis() {
                     <i className="fi fi-br-search search-icon" />
                     <input
                         type="text"
-                        placeholder="ค้นหา Keyword หรือ @Channel บน YouTube"
+                        placeholder="ค้นหาชื่อช่อง, @ชื่อช่อง, #keyword หรือ Channel ID"
                         className="search-input-top"
                         value={globalSearch}
                         onChange={e => setGlobalSearch(e.target.value)}
-                        onKeyDown={e => e.key === 'Enter' && searchYoutube(globalSearch).then(() => setGlobalSearch(''))}
+                        onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                                searchYoutube(globalSearch);
+                                setGlobalSearch('');
+                            }
+                        }}
                     />
                 </div>
                 <button
                     className="analyze-btn-small"
                     style={{ background: PLATFORM_COLOR }}
-                    onClick={() => searchYoutube(globalSearch).then(() => setGlobalSearch(''))}
+                    onClick={() => {
+                        searchYoutube(globalSearch);
+                        setGlobalSearch('');
+                    }}
                     disabled={isLoading}
                 >
-                    {isLoading ? 'Loading...' : 'ค้นหา'}
+                    {isLoading ? 'กำลังโหลด...' : 'ค้นหา'}
                 </button>
             </div>
 
@@ -331,19 +459,26 @@ function YoutubeAnalysis() {
                     <FilterToolbar
                         localFilter={localFilter}
                         setLocalFilter={setLocalFilter}
-                        onRefresh={() => { loadGraphData(); setLocalFilter(''); setSelectedCategory(''); }}
-                        onSync={syncDB}
+                        onRefresh={async () => {
+                            // เมื่อกดปุ่ม Refresh ให้มันไปเรียก API ตัวที่คุณเพิ่งรันใน Terminal เลย
+                            await syncDB();        // ← ตัวนี้จะส่ง fetch POST ไปที่ /api/youtube-sync-neo4j
+                            await loadGraphData(); // ← พอมัน sync เสร็จค่อยดึงข้อมูลกราฟใหม่มาวาด
+                            setLocalFilter('');
+                        }}
+                        platform="youtube"
                     />
 
                     <div className="graph-outer">
-                        <NodePopupCard
-                            node={selectedNode}
-                            imgCache={imgCache}
-                            favorites={favorites}
-                            favLoading={favLoading}
-                            onClose={handleBackgroundClick}
-                            onToggleFavorite={handleToggleFavorite}
-                        />
+                        {!isFullScreen && (
+                            <NodePopupCard
+                                node={selectedNode}
+                                imgCache={imgCache}
+                                favorites={favorites}
+                                favLoading={favLoading}
+                                onClose={handleBackgroundClick}
+                                onToggleFavorite={handleToggleFavorite}
+                            />
+                        )}
 
                         <div
                             ref={containerRef}
@@ -360,8 +495,19 @@ function YoutubeAnalysis() {
                                 {isFullScreen ? '✖️' : '⤢'}
                             </button>
 
-                            <ForceGraph2D
-                                ref={fgRef}
+                            {isFullScreen && (
+                                <NodePopupCard
+                                    node={selectedNode}
+                                    imgCache={imgCache}
+                                    favorites={favorites}
+                                    favLoading={favLoading}
+                                    onClose={handleBackgroundClick}
+                                    onToggleFavorite={handleToggleFavorite}
+                                />
+                            )}
+
+                            <LinkTooltip link={hoverLink} pos={linkTooltipPos} allLinks={data.links} />
+                            <ForceGraph2D ref={fgRef}
                                 graphData={data}
                                 width={dimensions.width}
                                 height={dimensions.height}
@@ -372,12 +518,18 @@ function YoutubeAnalysis() {
                                     if (selectedCategory) return (link.source?.category === selectedCategory || link.target?.category === selectedCategory) ? '#a5a5a5' : 'rgba(200,200,200,0.1)';
                                     return highlightLinks.has(link) ? '#333' : 'rgba(200,200,200,0.1)';
                                 }}
-                                linkWidth={link => highlightLinks.has(link) ? getLinkWidth(link) : (link.isPhantom ? 0 : 1.25)}
+                                linkWidth={link => {
+                                    if (link.isPhantom) return 0;
+                                    const width = getLinkWidth(link, data.links); // ← เพิ่ม data.links
+                                    return isNaN(width) ? 1.5 : Math.min(width, 8);
+                                }}
                                 nodeCanvasObject={paintNode}
                                 nodePointerAreaPaint={(node, color, ctx) => {
                                     ctx.fillStyle = color;
                                     ctx.beginPath(); ctx.arc(node.x, node.y, getNodeSize(node) + 5, 0, 2 * Math.PI); ctx.fill();
                                 }}
+                                linkHoverPrecision={8}
+                                onLinkHover={(link, prevLink, event) => handleLinkHover(link, prevLink, event)}
                                 onNodeHover={handleNodeHover}
                                 onNodeClick={handleNodeClick}
                                 onBackgroundClick={handleBackgroundClick}
