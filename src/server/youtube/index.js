@@ -271,6 +271,49 @@ app.get("/api/youtube/data", async (req, res) => {
 app.get("/api/youtube/health", (req, res) => {
   res.json({ status: "ok", service: "youtube-backend", port: PORT });
 });
+// ─────────────────────────────────────────
+// GET /api/last-updated  (ค้นหาล่าสุด)
+// ดึงจาก lastUpdate field ของ document ล่าสุดใน youtuber collection
+// ─────────────────────────────────────────
+app.get('/api/last-updated', async (req, res) => {
+  const client = new MongoClient(CONFIG.uri);
+  try {
+    await client.connect();
+    const col = client.db(CONFIG.db).collection(CONFIG.collection);
+    const latest = await col
+      .find({ platform: 'youtube', lastUpdate: { $exists: true } })
+      .sort({ lastUpdate: -1 })
+      .limit(1)
+      .toArray();
+    res.json({ lastUpdated: latest[0]?.lastUpdate || null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    await client.close();
+  }
+});
+
+// ─────────────────────────────────────────
+// GET /api/last-refreshed  (อัพเดตยอดล่าสุด)
+// ดึงจาก lastUpdate เหมือนกัน (YouTube ไม่มี lastSynced แยก)
+// ─────────────────────────────────────────
+app.get('/api/last-refreshed', async (req, res) => {
+  const client = new MongoClient(CONFIG.uri);
+  try {
+    await client.connect();
+    const col = client.db(CONFIG.db).collection(CONFIG.collection);
+    const latest = await col
+      .find({ platform: 'youtube', lastUpdate: { $exists: true } })
+      .sort({ lastUpdate: -1 })
+      .limit(1)
+      .toArray();
+    res.json({ lastRefreshed: latest[0]?.lastUpdate || null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    await client.close();
+  }
+});
 
 const PORT = process.env.YOUTUBE_PORT || 5001;
 app.listen(PORT, () =>

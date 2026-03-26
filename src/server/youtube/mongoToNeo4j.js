@@ -35,11 +35,10 @@ async function syncToNeo4j() {
 
   try {
     await mongoClient.connect();
-    const documents = await mongoClient
-      .db("InfluencerProject")
-      .collection("youtuber")
-      .find()
-      .toArray();
+    const db = mongoClient.db("InfluencerProject"); // สร้างตัวแปร db ไว้ใช้ซ้ำ
+    const collection = db.collection("youtuber");
+
+    const documents = await collection.find().toArray();
 
     const session = neoDriver.session();
     console.log(`🔗 Syncing ${documents.length} items to Neo4j...`);
@@ -65,7 +64,8 @@ async function syncToNeo4j() {
                         r.totalLikes = $likes,
                         r.totalComments = $comments,
                         r.totalShares = 0,
-                        r.platform = 'youtube'
+                        r.platform = 'youtube',
+                        r.lastUpdate = datetime()
           ON MATCH SET  r.weight = r.weight + 1,
                         r.totalViews = r.totalViews + $views,
                         r.totalLikes = r.totalLikes + $likes,
@@ -81,6 +81,12 @@ async function syncToNeo4j() {
           likes: neo4j.int(doc.totalLikes || 0),
           comments: neo4j.int(doc.totalComments || 0),
         });
+
+        await collection.updateOne(
+          { _id: doc._id },
+          { $set: { lastUpdate: new Date() } }
+        );
+
         console.log(`✅ ${doc.authorName} → ${branded}`);
       }
     } finally {

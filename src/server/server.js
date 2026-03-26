@@ -157,6 +157,20 @@ app.post('/api/search-tiktok', async (req, res) => {
 app.get('/api/last-updated', async (req, res) => {
     const platform = req.query.platform || 'tiktok';
     try {
+        // ✅ เพิ่ม: YouTube → forward ไป YouTube service
+        if (platform === 'youtube') {
+            try {
+                const response = await axios.get(
+                    `${YOUTUBE_SERVICE}/api/last-updated`,
+                    { timeout: 5000 }
+                );
+                return res.json(response.data);
+            } catch (err) {
+                console.error('❌ YouTube service last-updated error:', err.message);
+                return res.json({ lastUpdated: null });
+            }
+        }
+
         // ลองหาจาก SearchHistory ก่อน
         const fromHistory = await SearchHistory
             .findOne({ platform })
@@ -166,7 +180,7 @@ app.get('/api/last-updated', async (req, res) => {
         if (fromHistory) {
             return res.json({ lastUpdated: fromHistory.lastSearched });
         }
-
+        
         // ถ้าไม่มี SearchHistory ให้ fallback ไปดู updatedAt ล่าสุดใน Influencer
         const fromInfluencer = await Influencer
             .findOne({ platform })
@@ -1220,6 +1234,19 @@ app.post('/api/refresh-stats', async (req, res) => {
 app.get('/api/last-refreshed', async (req, res) => {
     const platform = req.query.platform || 'tiktok';
     try {
+        // ✅ YouTube → ดึงจาก YouTube service
+        if (platform === 'youtube') {
+            try {
+                const response = await axios.get(
+                    `${YOUTUBE_SERVICE}/api/last-refreshed`,
+                    { timeout: 5000 }
+                );
+                return res.json(response.data);
+            } catch (err) {
+                console.error('❌ YouTube service last-refreshed error:', err.message);
+                return res.json({ lastRefreshed: null });
+            }
+        }
         const latest = await Influencer.findOne({ platform, lastSynced: { $ne: null } })
             .sort({ lastSynced: -1 })
             .select('lastSynced')

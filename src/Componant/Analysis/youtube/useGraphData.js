@@ -80,6 +80,7 @@ export function useGraphData() {
             }
 
             await loadGraphData();
+            return input.trim(); // ส่งกลับ search term เพื่อให้ UI แสดงผลได้ถูกต้อง (เช่นใน input box)
         } catch {
             alert('เกิดข้อผิดพลาดในการค้นหา YouTube');
         } finally {

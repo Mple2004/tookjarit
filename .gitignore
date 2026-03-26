@@ -6,6 +6,7 @@ src/server/venv/
 .env
 .env.local
 .env.*.local
+.env.development
 
 # Logs
 npm-debug.log*

@@ -582,7 +582,7 @@ function TikTokAnalysis() {
     return (
         <div className="analysis-page">
             <style>{`@keyframes tooltipIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }`}</style>
-            <LoadingOverlay isLoading={isLoading} platform="tiktok" />
+            <LoadingOverlay isLoading={isLoading} />
 
             <div className="analysis-header-container">
                 <button className="back-to-platform-btn" onClick={() => navigate('/analysis')}>← เลือก Platform</button>
@@ -638,6 +638,32 @@ function TikTokAnalysis() {
                                 }}>
                                 <div className="legend-dot" style={{ background: cat.color }} />
                                 {cat.name}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* ── Follower Tier Filter ── */}
+                <div className="legend-section tier-section">
+                    <div className="legend-title">👥 FOLLOWER TIER — กรองตามจำนวนผู้ติดตาม</div>
+                    <div className="legend-pills">
+                        <div
+                            className={`legend-pill ${selectedTier === '' ? 'selected' : ''}`}
+                            onClick={() => setSelectedTier('')}
+                        >
+                            ทั้งหมด
+                        </div>
+                        {FOLLOWER_TIERS.map(tier => (
+                            <div
+                                key={tier.key}
+                                className={`legend-pill tier-pill ${selectedTier === tier.key ? 'selected' : ''}`}
+                                onClick={() => setSelectedTier(prev => prev === tier.key ? '' : tier.key)}
+                            >
+                                <span className="tier-emoji">{tier.emoji}</span>
+                                <span>{tier.label}</span>
+                                {tierCounts[tier.key] > 0 && (
+                                    <span className="tier-count">{tierCounts[tier.key]}</span>
+                                )}
                             </div>
                         ))}
                     </div>
