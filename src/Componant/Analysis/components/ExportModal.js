@@ -1,6 +1,6 @@
 // src/Componant/Analysis/components/ExportModal.js
 import React, { useState } from 'react';
-
+const API = process.env.REACT_APP_API_URL
 const CATEGORIES = [
     'Fashion', 'Beauty & Personal Care', 'Health & Wellness',
     'Food & Beverage', 'Mom & Kids', 'IT & Gadgets',
@@ -30,7 +30,7 @@ function ExportModal({ isOpen, onClose, currentPlatform }) {
 
             const kwPart = keyword.trim() ? `&keyword=${keyword.trim()}` : '';
             const res = await fetch(
-                `http://localhost:5000/api/export-excel?${params.toString().replace(/%2C/g, ',')}${kwPart}`
+                `${API}/api/export-excel?${params.toString().replace(/%2C/g, ',')}${kwPart}`
             );
             if (!res.ok) throw new Error(`Server error: ${res.status}`);
 

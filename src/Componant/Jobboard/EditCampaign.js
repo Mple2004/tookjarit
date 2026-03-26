@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import './Jobboard.css';
 
-const API = 'http://localhost:5000';
+const API = process.env.REACT_APP_API_URL || '';
 
 const CATEGORIES = [
     'Fashion', 'Beauty & Personal Care', 'Health & Wellness',

@@ -1,5 +1,4 @@
 // Analysis/youtube/YoutubeAnalysis.js
-// Main page สำหรับ YouTube — โครงสร้างเหมือน TikTok แต่ logic ต่างกัน
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import ForceGraph2D from 'react-force-graph-2d';
@@ -10,37 +9,30 @@ import { useHighlight }   from '../hooks/useHighlight';
 import { useAvatarCache } from '../hooks/useAvatarCache';
 import NodePopupCard      from './NodePopupCard';
 import FilterToolbar      from '../components/FilterToolbar';
-import ExportButton       from '../components/ExportButton';
 import LoadingOverlay     from '../../LoadingOverlay';
-import { CATEGORIES, CATEGORY_COLOR_MAP } from '../constants/categories';
+import { CATEGORIES, CATEGORY_COLOR_MAP, FOLLOWER_TIERS } from '../constants/categories';
 
-const API = 'http://localhost:5000';
+const API = process.env.REACT_APP_API_URL || '';
 const PLATFORM_COLOR = '#cc0000';
 
-// ─── Node Helpers ───────────────────────────────────────────────────────────
+// ─── Node Helpers ────────────────────────────────────────────────────────────
 function getNodeColor(node) {
     if (node.type === 'Influencer') return '#2d3436';
     return CATEGORY_COLOR_MAP[node.category] || '#BDC3C7';
 }
+
 function getNodeSize(node) {
     if (node.type === 'Brand') return 30;
-    // YouTube ใช้ subscribers แทน followers
-    const count = node.subscribers || node.followers;
-    if (!count) return 25;
+    const count = node.subscribers || node.followers || 0;
     return Math.min(Math.max(Math.log(count) * 4 + 10, 25), 80);
 }
-function getLinkWidth(link, allLinks) {
-    if (link.isPhantom) return 0;
-    if (!allLinks || allLinks.length === 0) return 1.5;
-    const rating = calcRating(link, allLinks);
-    return 1.5 + (rating / 10) * 6.5; // range 1.5 - 8 เหมือน TikTok
+
+function calcRawScore(link) {
+    return (link.totalViews || 0) * 0.1 +
+           (link.totalLikes || 0) * 0.4 +
+           (link.totalComments || 0) * 0.3;
 }
 
-// function
-function calcRawScore(link) {
-    return (link.totalViews || 0) * 0.1 + (link.totalLikes || 0) * 0.4 +
-           (link.totalComments || 0) * 0.3 ;
-}
 function calcRating(link, allLinks) {
     const brandId = typeof link.target === 'object' ? link.target.id : link.target;
     const sameBrand = allLinks.filter(l => {
@@ -51,6 +43,14 @@ function calcRating(link, allLinks) {
     const maxRaw = Math.max(...sameBrand.map(calcRawScore), 1);
     return (calcRawScore(link) / maxRaw) * 10;
 }
+
+function getLinkWidth(link, allLinks) {
+    if (link.isPhantom) return 0;
+    if (!allLinks || allLinks.length === 0) return 1.5;
+    const rating = calcRating(link, allLinks);
+    return 1.5 + (rating / 10) * 6.5;
+}
+
 function getTier(subscribers) {
     if (!subscribers) return { label: 'Unknown', color: '#b2bec3' };
     if (subscribers >= 1_000_000) return { label: '👑 Mega', color: '#6c5ce7' };
@@ -60,16 +60,40 @@ function getTier(subscribers) {
     if (subscribers >= 1_000)     return { label: '🌱 Nano', color: '#74b9ff' };
     return { label: '🔰 New', color: '#b2bec3' };
 }
+
+function matchesTier(node, selectedTier) {
+    if (!selectedTier) return true;
+    if (node.type !== 'Influencer') return true;
+    const tier = FOLLOWER_TIERS.find(t => t.key === selectedTier);
+    if (!tier) return true;
+    const f = node.subscribers || node.followers || 0;
+    return f >= tier.min && f <= tier.max;
+}
+
+function nodeMatchesCategory(node, category, links) {
+    if (!category) return true;
+    if (node.category === category) return true;
+    if (node.type === 'Influencer') {
+        return links.some(l =>
+            (l.source?.id === node.id || l.target?.id === node.id) &&
+            (l.source?.category === category || l.target?.category === category)
+        );
+    }
+    return false;
+}
+
 function fmtNum(n) {
     if (!n || n === 0) return '-';
     if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
     if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'K';
     return n.toLocaleString();
 }
+
+// ─── Link Tooltip ─────────────────────────────────────────────────────────────
 function LinkTooltip({ link, pos, allLinks }) {
     if (!link || !pos) return null;
 
-    const subscribers = typeof link.source === 'object' 
+    const subscribers = typeof link.source === 'object'
         ? link.source.subscribers || link.source.followers : 0;
     const tier = getTier(subscribers);
     const rating = calcRating(link, allLinks);
@@ -80,16 +104,12 @@ function LinkTooltip({ link, pos, allLinks }) {
 
     return (
         <div style={{
-            position: 'absolute',
-            left: pos.x + 16, top: pos.y - 10,
-            background: 'rgba(15,15,25,0.92)',
-            backdropFilter: 'blur(8px)',
-            border: '1px solid rgba(255,255,255,0.12)',
-            borderRadius: 14, padding: '10px 14px',
-            minWidth: 175, pointerEvents: 'none',
+            position: 'absolute', left: pos.x + 16, top: pos.y - 10,
+            background: 'rgba(15,15,25,0.92)', backdropFilter: 'blur(8px)',
+            border: '1px solid rgba(255,255,255,0.12)', borderRadius: 14,
+            padding: '10px 14px', minWidth: 175, pointerEvents: 'none',
             zIndex: 99999, boxShadow: '0 8px 32px rgba(0,0,0,0.35)',
-            fontFamily: "'Prompt', sans-serif",
-            animation: 'tooltipIn 0.15s ease',
+            fontFamily: "'Prompt', sans-serif", animation: 'tooltipIn 0.15s ease',
         }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#fff', marginBottom: 8, whiteSpace: 'nowrap' }}>
                 {infName}
@@ -120,59 +140,33 @@ function LinkTooltip({ link, pos, allLinks }) {
     );
 }
 
-
-// ─── Main Component ─────────────────────────────────────────────────────────
+// ─── Main Component ───────────────────────────────────────────────────────────
 function YoutubeAnalysis() {
     const location = useLocation();
     const navigate = useNavigate();
 
-    const fgRef        = useRef();
+    const fgRef = useRef();
     const containerRef = useRef();
 
     const { data, isLoading, loadGraphData, searchYoutube, syncDB } = useGraphData();
     const { highlightNodes, highlightLinks, hoverNode, setHoverNode, updateHighlights, clearHighlights } = useHighlight(data.links);
     const { imgCache, loadAvatarForNode } = useAvatarCache(fgRef, 'youtube');
 
-    const [dimensions, setDimensions]       = useState({ width: 800, height: 600 });
-    const [isFullScreen, setIsFullScreen]   = useState(false);
-    const [selectedNode, setSelectedNode]   = useState(null);
-    const [globalSearch, setGlobalSearch]   = useState('');
-    const [localFilter, setLocalFilter]     = useState('');
+    const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
+    const [isFullScreen, setIsFullScreen] = useState(false);
+    const [selectedNode, setSelectedNode] = useState(null);
+    const [globalSearch, setGlobalSearch] = useState('');
+    const [localFilter, setLocalFilter] = useState('');
     const [selectedCategory, setSelectedCategory] = useState('');
+    const [selectedTier, setSelectedTier] = useState('');
 
-    const [favorites, setFavorites]   = useState(new Set());
+    const [favorites, setFavorites] = useState(new Set());
     const [favLoading, setFavLoading] = useState(false);
 
     const [hoverLink, setHoverLink] = useState(null);
     const [linkTooltipPos, setLinkTooltipPos] = useState(null);
+    
 
-    const handleLinkHover = useCallback((link, prevLink, event) => {
-        if (link && !link.isPhantom) {
-            setHoverLink(link);
-            if (event) {
-                const rect = containerRef.current?.getBoundingClientRect();
-                if (rect) setLinkTooltipPos({ x: event.clientX - rect.left, y: event.clientY - rect.top });
-            }
-        } else {
-            setHoverLink(null);
-            setLinkTooltipPos(null);
-        }
-    }, []);
-
-    useEffect(() => {
-        const canvas = containerRef.current?.querySelector('canvas');
-        if (!canvas) return;
-        const onMove = (e) => {
-            if (!hoverLink) return;
-            const rect = containerRef.current.getBoundingClientRect();
-            setLinkTooltipPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
-        };
-        canvas.addEventListener('mousemove', onMove);
-        return () => canvas.removeEventListener('mousemove', onMove);
-    }, [hoverLink]);
-
-
-    // ── Load initial data ──────────────────────────────────────────────────
     useEffect(() => { loadGraphData(); }, [loadGraphData]);
 
     // ── Load Favorites ─────────────────────────────────────────────────────
@@ -185,7 +179,6 @@ function YoutubeAnalysis() {
             .catch(() => {});
     }, []);
 
-    // ── Toggle Favorite ────────────────────────────────────────────────────
     const handleToggleFavorite = async (influencerName) => {
         const token = localStorage.getItem('token');
         if (!token) { alert('กรุณาเข้าสู่ระบบก่อน'); return; }
@@ -224,46 +217,50 @@ function YoutubeAnalysis() {
                 setDimensions({ width: containerRef.current.offsetWidth, height: containerRef.current.offsetHeight });
             }
         };
-        setTimeout(update, 150);
+        const resizeTimer = setTimeout(update, 150);
         window.addEventListener('resize', update);
-        return () => window.removeEventListener('resize', update);
+        return () => {
+            clearTimeout(resizeTimer);
+            window.removeEventListener('resize', update);
+        };
     }, [isFullScreen]);
 
     // ── Auto Zoom Fit ──────────────────────────────────────────────────────
     useEffect(() => {
-    const timer = setTimeout(() => {
-        if (fgRef.current) fgRef.current.zoomToFit(1000, 50);
-    }, 800);
-    return () => clearTimeout(timer);
-}, [data]);
+        const timer = setTimeout(() => {
+            if (fgRef.current) fgRef.current.zoomToFit(1000, 50);
+        }, 800);
+        return () => clearTimeout(timer);
+    }, [data]);
 
     // ── Zoom to Category ───────────────────────────────────────────────────
     useEffect(() => {
         if (!selectedCategory || !fgRef.current || !data.nodes.length) return;
-        const catNodes = data.nodes.filter(node => {
-            if (node.category === selectedCategory) return true;
-            if (node.type === 'Influencer') {
-                return data.links.some(l => {
-                    const src = typeof l.source === 'object' ? l.source : data.nodes.find(n => n.id === l.source);
-                    const tgt = typeof l.target === 'object' ? l.target : data.nodes.find(n => n.id === l.target);
-                    return (src?.id === node.id && tgt?.category === selectedCategory) ||
-                           (tgt?.id === node.id && src?.category === selectedCategory);
-                });
-            }
-            return false;
-        });
+        setSelectedNode(null);
+        setHoverNode(null);
+        clearHighlights();
+
+        const catNodes = data.nodes.filter(node => nodeMatchesCategory(node, selectedCategory, data.links));
         if (!catNodes.length) return;
+
         const avgX = catNodes.reduce((s, n) => s + (n.x || 0), 0) / catNodes.length;
         const avgY = catNodes.reduce((s, n) => s + (n.y || 0), 0) / catNodes.length;
         let maxD = 0;
-        catNodes.forEach(n => { const d = Math.sqrt((n.x - avgX) ** 2 + (n.y - avgY) ** 2); if (d > maxD) maxD = d; });
-        setTimeout(() => {
-            fgRef.current.centerAt(avgX, avgY, 1000);
-            fgRef.current.zoom(Math.min(3, Math.max(1.2, 400 / (maxD + 100))), 400);
-        }, 100);
-    }, [selectedCategory, data]);
+        catNodes.forEach(n => {
+            const d = Math.sqrt((n.x - avgX) ** 2 + (n.y - avgY) ** 2);
+            if (d > maxD) maxD = d;
+        });
 
-    // ── ?highlight= from Favorites ─────────────────────────────────────────
+        const timer = setTimeout(() => {
+            if (fgRef.current) {
+                fgRef.current.centerAt(avgX, avgY, 1000);
+                fgRef.current.zoom(Math.min(3, Math.max(1.2, 400 / (maxD + 100))), 400);
+            }
+        }, 100);
+        return () => clearTimeout(timer);
+    }, [selectedCategory, data, clearHighlights, setHoverNode]);
+
+    // ── Highlight from URL ─────────────────────────────────────────────────
     useEffect(() => {
         const name = new URLSearchParams(location.search).get('highlight');
         if (!name || !data.nodes.length || !fgRef.current) return;
@@ -273,17 +270,21 @@ function YoutubeAnalysis() {
         setSelectedNode(target);
         setHoverNode(target);
         updateHighlights(target);
-        setTimeout(() => {
+        const timer = setTimeout(() => {
             if (fgRef.current && target.x != null) {
                 fgRef.current.centerAt(target.x, target.y, 1000);
                 fgRef.current.zoom(3, 1000);
             }
         }, 800);
-    }, [location.search, data.nodes]);
+        return () => clearTimeout(timer);
+    }, [location.search, data.nodes, setHoverNode, updateHighlights]);
 
     // ── Local Filter ───────────────────────────────────────────────────────
     useEffect(() => {
-        if (!localFilter.trim()) { if (!selectedNode) clearHighlights(); return; }
+        if (!localFilter.trim()) {
+            if (!selectedNode) clearHighlights();
+            return;
+        }
         const match = data.nodes.find(n => n.name.toLowerCase().includes(localFilter.toLowerCase()));
         if (match && fgRef.current) {
             setHoverNode(match);
@@ -291,54 +292,173 @@ function YoutubeAnalysis() {
             fgRef.current.centerAt(match.x, match.y, 1000);
             fgRef.current.zoom(3, 1000);
         }
-    }, [localFilter, data.nodes]);
+    }, [localFilter, data.nodes, selectedNode, clearHighlights, setHoverNode, updateHighlights]);
 
+    // ── Mouse Move — follow cursor for link tooltip ────────────────────────
+    useEffect(() => {
+        const canvas = containerRef.current?.querySelector('canvas');
+        if (!canvas) return;
+        const onMove = (e) => {
+            if (!hoverLink) return;
+            const rect = containerRef.current.getBoundingClientRect();
+            setLinkTooltipPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+        };
+        canvas.addEventListener('mousemove', onMove);
+        return () => canvas.removeEventListener('mousemove', onMove);
+    }, [hoverLink]);
 
+    // ── Tier Counts ────────────────────────────────────────────────────────
+    const tierCounts = {};
+    FOLLOWER_TIERS.forEach(tier => {
+        tierCounts[tier.key] = data.nodes.filter(n =>
+            n.type === 'Influencer' && matchesTier(n, tier.key)
+        ).length;
+    });
 
     // ── Graph Interaction ──────────────────────────────────────────────────
-    const handleNodeHover = (node) => {
+    const handleNodeHover = useCallback((node) => {
         if (selectedNode || localFilter) return;
+        if (selectedCategory && node && !nodeMatchesCategory(node, selectedCategory, data.links)) return;
         setHoverNode(node || null);
         updateHighlights(node);
-    };
+        // เคลียร์ link tooltip เมื่อ hover node
+        setHoverLink(null);
+        setLinkTooltipPos(null);
+    }, [selectedNode, localFilter, selectedCategory, data.links, updateHighlights, setHoverNode]);
+
     const handleNodeClick = (node) => {
+        if (selectedCategory && !nodeMatchesCategory(node, selectedCategory, data.links)) return;
+
         const n = node === selectedNode ? null : node;
-        setSelectedNode(n); setHoverNode(n); updateHighlights(n); setLocalFilter('');
+        setSelectedNode(n);
+        setHoverNode(n);
+        updateHighlights(n);
+        setLocalFilter('');
+        setHoverLink(null);
+        setLinkTooltipPos(null);
+
         if (fgRef.current) {
-            if (n) { fgRef.current.centerAt(node.x, node.y, 1000); fgRef.current.zoom(1.75, 1000); }
-            else fgRef.current.zoomToFit(1000, 50);
+            if (n) {
+                fgRef.current.centerAt(node.x, node.y, 1000);
+                fgRef.current.zoom(1.75, 1000);
+            } else if (selectedCategory) {
+                const catNodes = data.nodes.filter(nd => nodeMatchesCategory(nd, selectedCategory, data.links));
+                if (catNodes.length) {
+                    const avgX = catNodes.reduce((s, nd) => s + (nd.x || 0), 0) / catNodes.length;
+                    const avgY = catNodes.reduce((s, nd) => s + (nd.y || 0), 0) / catNodes.length;
+                    fgRef.current.centerAt(avgX, avgY, 1000);
+                }
+            } else {
+                fgRef.current.zoomToFit(1000, 50);
+            }
         }
     };
+
     const handleBackgroundClick = () => {
-        setSelectedNode(null); setLocalFilter('');
+        setSelectedNode(null);
+        setLocalFilter('');
         clearHighlights();
-        if (fgRef.current) fgRef.current.zoomToFit(1000);
+        setHoverLink(null);
+        setLinkTooltipPos(null);
+
+        if (fgRef.current) {
+            if (selectedCategory) {
+                const catNodes = data.nodes.filter(nd => nodeMatchesCategory(nd, selectedCategory, data.links));
+                if (catNodes.length) {
+                    const avgX = catNodes.reduce((s, nd) => s + (nd.x || 0), 0) / catNodes.length;
+                    const avgY = catNodes.reduce((s, nd) => s + (nd.y || 0), 0) / catNodes.length;
+                    let maxD = 0;
+                    catNodes.forEach(nd => {
+                        const d = Math.sqrt((nd.x - avgX) ** 2 + (nd.y - avgY) ** 2);
+                        if (d > maxD) maxD = d;
+                    });
+                    fgRef.current.centerAt(avgX, avgY, 1000);
+                    fgRef.current.zoom(Math.min(3, Math.max(1.2, 400 / (maxD + 100))), 400);
+                }
+            } else {
+                fgRef.current.zoomToFit(1000);
+            }
+        }
     };
+
+    // ── Search + Auto Zoom ────────────────────────────────────────────────
+    const handleSearch = useCallback(async () => {
+        if (!globalSearch.trim()) return;
+        const searched = await searchYoutube(globalSearch);
+        setGlobalSearch('');
+        if (!searched) return;
+        setTimeout(() => {
+            if (!fgRef.current) return;
+            const target = data.nodes.find(n =>
+                n.name?.toLowerCase().includes(searched.toLowerCase()) ||
+                n.id?.toLowerCase().includes(searched.toLowerCase())
+            );
+            if (target && target.x != null) {
+                setSelectedNode(target);
+                setHoverNode(target);
+                updateHighlights(target);
+                fgRef.current.centerAt(target.x, target.y, 1000);
+                fgRef.current.zoom(2.5, 1000);
+            } else {
+                fgRef.current.zoomToFit(1000, 50);
+            }
+        }, 800);
+    }, [globalSearch, searchYoutube, data.nodes, updateHighlights, setHoverNode]);
+
+    // ── Link Hover — ไม่พึ่ง event parameter (ForceGraph2D ไม่ส่งมา) ──────
+    const handleLinkHover = useCallback((link) => {
+        if (link && !link.isPhantom) {
+            setHoverLink(link);
+        } else {
+            setHoverLink(null);
+            setLinkTooltipPos(null);
+        }
+    }, []);
 
     // ── Paint Node ─────────────────────────────────────────────────────────
     const paintNode = useCallback((node, ctx, globalScale) => {
-        const isHover    = hoverNode === node;
+        const isHover = hoverNode === node;
         const isSelected = selectedNode === node;
         const isNeighbor = highlightNodes.has(node.id);
-        const isInf      = node.type === 'Influencer';
-        const radius     = getNodeSize(node);
-        const color      = getNodeColor(node);
+        const isInf = node.type === 'Influencer';
+        const radius = getNodeSize(node);
+        const color = getNodeColor(node);
 
         let alpha = 1;
-        if (selectedCategory) {
-            const match = node.category === selectedCategory ||
-                (isInf && data.links.some(l =>
-                    (l.source?.id === node.id || l.target?.id === node.id) &&
-                    (l.source?.category === selectedCategory || l.target?.category === selectedCategory)
-                ));
-            alpha = match ? 1 : 0.1;
-        } else if (hoverNode || selectedNode || localFilter) {
-            alpha = (isHover || isSelected || isNeighbor) ? 1 : 0.1;
+
+        if (selectedTier) {
+            if (isInf) {
+                alpha = matchesTier(node, selectedTier) ? 1 : 0.08;
+            } else {
+                const hasMatchingInf = data.links.some(l => {
+                    if (l.isPhantom) return false;
+                    const src = typeof l.source === 'object' ? l.source : null;
+                    const tgt = typeof l.target === 'object' ? l.target : null;
+                    if (src?.id === node.id) return matchesTier(tgt, selectedTier);
+                    if (tgt?.id === node.id) return matchesTier(src, selectedTier);
+                    return false;
+                });
+                alpha = hasMatchingInf ? 1 : 0.08;
+            }
         }
+
+        if (selectedCategory) {
+            const inCategory = nodeMatchesCategory(node, selectedCategory, data.links);
+            if (!inCategory) {
+                alpha = Math.min(alpha, 0.03);
+            } else if (hoverNode || selectedNode) {
+                if (!(isHover || isSelected || isNeighbor)) alpha = Math.min(alpha, 0.15);
+            }
+        } else if (hoverNode || selectedNode || localFilter) {
+            if (!(isHover || isSelected || isNeighbor)) alpha = Math.min(alpha, 0.1);
+        }
+
         ctx.globalAlpha = alpha;
 
-        ctx.beginPath(); ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI);
-        ctx.fillStyle = '#fff'; ctx.fill();
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI);
+        ctx.fillStyle = '#fff';
+        ctx.fill();
 
         if (isInf) {
             const cached = imgCache.current[node.name];
@@ -377,17 +497,56 @@ function YoutubeAnalysis() {
             ctx.fillStyle = '#2d3436'; ctx.fillText(node.name, node.x, ly);
         }
         ctx.globalAlpha = 1;
-    }, [hoverNode, selectedNode, highlightNodes, selectedCategory, data.links,
-        localFilter, loadAvatarForNode, imgCache]);
+    }, [hoverNode, selectedNode, highlightNodes, selectedCategory, selectedTier, data.links, localFilter, loadAvatarForNode, imgCache]);
+
+    // ── Link Color & Width ─────────────────────────────────────────────────
+    const getLinkColor = useCallback((link) => {
+        if (link.isPhantom) return 'rgba(0,0,0,0)';
+
+        if (selectedTier) {
+            const src = typeof link.source === 'object' ? link.source : null;
+            const tgt = typeof link.target === 'object' ? link.target : null;
+            const infNode = src?.type === 'Influencer' ? src : tgt?.type === 'Influencer' ? tgt : null;
+            if (infNode && !matchesTier(infNode, selectedTier)) return 'rgba(200,200,200,0.05)';
+        }
+
+        const srcCat = link.source?.category;
+        const tgtCat = link.target?.category;
+        const linkInCategory = !selectedCategory || srcCat === selectedCategory || tgtCat === selectedCategory;
+
+        if (selectedCategory) {
+            if (!linkInCategory) return 'rgba(200,200,200,0.03)';
+            if (hoverNode || selectedNode) {
+                return highlightLinks.has(link) ? '#555' : 'rgba(150,150,150,0.15)';
+            }
+            return 'rgba(66,66,66,0.4)';
+        }
+
+        if (!hoverNode && !selectedNode && !localFilter) return 'rgba(66,66,66,0.3)';
+        return highlightLinks.has(link) ? '#333' : 'rgba(200,200,200,0.1)';
+    }, [selectedCategory, selectedTier, hoverNode, selectedNode, localFilter, highlightLinks]);
+
+    const getLinkWidthFn = useCallback((link) => {
+        if (link.isPhantom) return 0;
+        const width = getLinkWidth(link, data.links);
+        const safeWidth = isNaN(width) ? 1.5 : Math.min(width, 8);
+
+        if (selectedCategory) {
+            const srcCat = link.source?.category;
+            const tgtCat = link.target?.category;
+            const linkInCategory = srcCat === selectedCategory || tgtCat === selectedCategory;
+            if (!linkInCategory) return 0;
+            if ((hoverNode || selectedNode) && highlightLinks.has(link)) return safeWidth;
+            return safeWidth * 0.7;
+        }
+        return safeWidth;
+    }, [selectedCategory, hoverNode, selectedNode, highlightLinks, data.links]);
 
     // ── Render ─────────────────────────────────────────────────────────────
     return (
         <div className="analysis-page">
             <style>{`@keyframes tooltipIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }`}</style>
-            <LoadingOverlay 
-            isLoading={isLoading} 
-            platform="youtube" // ส่งค่า "youtube" เข้าไป
-            />
+            <LoadingOverlay isLoading={isLoading} platform="youtube" />
 
             {/* Header */}
             <div className="analysis-header-container">
@@ -407,8 +566,9 @@ function YoutubeAnalysis() {
                         onChange={e => setGlobalSearch(e.target.value)}
                         onKeyDown={e => {
                             if (e.key === 'Enter') {
-                                searchYoutube(globalSearch);
-                                setGlobalSearch('');
+                                handleSearch()
+                                //searchYoutube(globalSearch);
+                                //setGlobalSearch('');
                             }
                         }}
                     />
@@ -416,9 +576,9 @@ function YoutubeAnalysis() {
                 <button
                     className="analyze-btn-small"
                     style={{ background: PLATFORM_COLOR }}
-                    onClick={() => {
-                        searchYoutube(globalSearch);
-                        setGlobalSearch('');
+                    onClick={() => { 
+                        //searchYoutube(globalSearch); setGlobalSearch('');
+                        handleSearch();
                     }}
                     disabled={isLoading}
                 >
@@ -431,10 +591,12 @@ function YoutubeAnalysis() {
                 <div className="legend-section">
                     <div className="legend-title">🎨 COLOR LEGEND — คลิกเพื่อกรอง</div>
                     <div className="legend-pills">
-                        <div
-                            className={`legend-pill ${selectedCategory === '' ? 'selected' : ''}`}
-                            onClick={() => { setSelectedCategory(''); fgRef.current?.zoomToFit(1000, 50); }}
-                        >
+                        <div className={`legend-pill ${selectedCategory === '' ? 'selected' : ''}`}
+                            onClick={() => {
+                                setSelectedCategory('');
+                                clearHighlights();
+                                if (fgRef.current) fgRef.current.zoomToFit(1000, 50);
+                            }}>
                             <div className="legend-dot" style={{ background: '#f0f0f0', border: '1.5px solid #ccc' }} />
                             All
                         </div>
@@ -444,11 +606,37 @@ function YoutubeAnalysis() {
                                 className={`legend-pill ${selectedCategory === cat.name ? 'selected' : ''}`}
                                 onClick={() => {
                                     setSelectedCategory(prev => prev === cat.name ? '' : cat.name);
-                                    if (selectedCategory === cat.name) fgRef.current?.zoomToFit(1000, 50);
+                                    if (selectedCategory === cat.name && fgRef.current) fgRef.current.zoomToFit(1000, 50);
                                 }}
                             >
                                 <div className="legend-dot" style={{ background: cat.color }} />
                                 {cat.name}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Subscriber Tier Filter */}
+                <div className="legend-section tier-section">
+                    <div className="legend-title">👥 SUBSCRIBER TIER — กรองตามจำนวนผู้ติดตาม</div>
+                    <div className="legend-pills">
+                        <div
+                            className={`legend-pill ${selectedTier === '' ? 'selected' : ''}`}
+                            onClick={() => setSelectedTier('')}
+                        >
+                            ทั้งหมด
+                        </div>
+                        {FOLLOWER_TIERS.map(tier => (
+                            <div
+                                key={tier.key}
+                                className={`legend-pill tier-pill ${selectedTier === tier.key ? 'selected' : ''}`}
+                                onClick={() => setSelectedTier(prev => prev === tier.key ? '' : tier.key)}
+                            >
+                                <span className="tier-emoji">{tier.emoji}</span>
+                                <span>{tier.label}</span>
+                                {tierCounts[tier.key] > 0 && (
+                                    <span className="tier-count">{tierCounts[tier.key]}</span>
+                                )}
                             </div>
                         ))}
                     </div>
@@ -460,25 +648,24 @@ function YoutubeAnalysis() {
                         localFilter={localFilter}
                         setLocalFilter={setLocalFilter}
                         onRefresh={async () => {
-                            // เมื่อกดปุ่ม Refresh ให้มันไปเรียก API ตัวที่คุณเพิ่งรันใน Terminal เลย
-                            await syncDB();        // ← ตัวนี้จะส่ง fetch POST ไปที่ /api/youtube-sync-neo4j
-                            await loadGraphData(); // ← พอมัน sync เสร็จค่อยดึงข้อมูลกราฟใหม่มาวาด
+                            await syncDB();
+                            await loadGraphData();
                             setLocalFilter('');
+                            setSelectedCategory('');
+                            setSelectedTier('');
                         }}
                         platform="youtube"
                     />
 
                     <div className="graph-outer">
-                        {!isFullScreen && (
-                            <NodePopupCard
-                                node={selectedNode}
-                                imgCache={imgCache}
-                                favorites={favorites}
-                                favLoading={favLoading}
-                                onClose={handleBackgroundClick}
-                                onToggleFavorite={handleToggleFavorite}
-                            />
-                        )}
+                        <NodePopupCard
+                            node={selectedNode}
+                            imgCache={imgCache}
+                            favorites={favorites}
+                            favLoading={favLoading}
+                            onClose={handleBackgroundClick}
+                            onToggleFavorite={handleToggleFavorite}
+                        />
 
                         <div
                             ref={containerRef}
@@ -495,43 +682,25 @@ function YoutubeAnalysis() {
                                 {isFullScreen ? '✖️' : '⤢'}
                             </button>
 
-                            {isFullScreen && (
-                                <NodePopupCard
-                                    node={selectedNode}
-                                    imgCache={imgCache}
-                                    favorites={favorites}
-                                    favLoading={favLoading}
-                                    onClose={handleBackgroundClick}
-                                    onToggleFavorite={handleToggleFavorite}
-                                />
-                            )}
-
                             <LinkTooltip link={hoverLink} pos={linkTooltipPos} allLinks={data.links} />
-                            <ForceGraph2D ref={fgRef}
+
+                            <ForceGraph2D
+                                ref={fgRef}
                                 graphData={data}
                                 width={dimensions.width}
                                 height={dimensions.height}
                                 backgroundColor="#e6e6e6"
-                                linkColor={link => {
-                                    if (link.isPhantom) return 'rgba(0,0,0,0)';
-                                    if (!hoverNode && !selectedNode && !localFilter && !selectedCategory) return 'rgba(66,66,66,0.3)';
-                                    if (selectedCategory) return (link.source?.category === selectedCategory || link.target?.category === selectedCategory) ? '#a5a5a5' : 'rgba(200,200,200,0.1)';
-                                    return highlightLinks.has(link) ? '#333' : 'rgba(200,200,200,0.1)';
-                                }}
-                                linkWidth={link => {
-                                    if (link.isPhantom) return 0;
-                                    const width = getLinkWidth(link, data.links); // ← เพิ่ม data.links
-                                    return isNaN(width) ? 1.5 : Math.min(width, 8);
-                                }}
+                                linkColor={getLinkColor}
+                                linkWidth={getLinkWidthFn}
+                                linkHoverPrecision={8}
                                 nodeCanvasObject={paintNode}
                                 nodePointerAreaPaint={(node, color, ctx) => {
                                     ctx.fillStyle = color;
                                     ctx.beginPath(); ctx.arc(node.x, node.y, getNodeSize(node) + 5, 0, 2 * Math.PI); ctx.fill();
                                 }}
-                                linkHoverPrecision={8}
-                                onLinkHover={(link, prevLink, event) => handleLinkHover(link, prevLink, event)}
                                 onNodeHover={handleNodeHover}
                                 onNodeClick={handleNodeClick}
+                                onLinkHover={(link, prevLink) => handleLinkHover(link, prevLink)}
                                 onBackgroundClick={handleBackgroundClick}
                             />
                         </div>

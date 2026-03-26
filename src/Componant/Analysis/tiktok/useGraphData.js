@@ -2,15 +2,17 @@
 // ดึงข้อมูล graph เฉพาะ TikTok (followers, likes, hashtag search)
 import { useState, useCallback } from 'react';
 
-const API = 'http://localhost:5000';
+const API = process.env.REACT_APP_API_URL || '';
 
 export function useGraphData() {
     const [data, setData] = useState({ nodes: [], links: [] });
     const [isLoading, setIsLoading] = useState(false);
+    const [thaiOnly, setThaiOnly] = useState(false);
 
-    const loadGraphData = useCallback(async () => {
+    const loadGraphData = useCallback(async (overrideThaiOnly) => {
+        const useThai = overrideThaiOnly !== undefined ? overrideThaiOnly : thaiOnly;
         try {
-            const res = await fetch(`${API}/api/graph-data?platform=tiktok`);
+            const res = await fetch(`${API}/api/graph-data?platform=tiktok&thaiOnly=${useThai}`);
             const rawData = await res.json();
 
             // dedup links
@@ -39,11 +41,17 @@ export function useGraphData() {
                 }
             });
 
+            // ★ ลบ fx/fy ที่อาจค้างจาก grid layout
+            rawData.nodes.forEach(node => {
+                delete node.fx;
+                delete node.fy;
+            });
+
             setData({ nodes: rawData.nodes, links: [...Object.values(linkMap), ...phantomLinks] });
         } catch (err) {
             console.error('❌ TikTok graph error:', err);
         }
-    }, []);
+    }, [thaiOnly]);
 
     // ค้นหาด้วย hashtag หรือ @username
     const searchTikTok = useCallback(async (keyword) => {
@@ -67,5 +75,12 @@ export function useGraphData() {
         await loadGraphData();
     }, [loadGraphData]);
 
-    return { data, isLoading, loadGraphData, searchTikTok, syncDB };
+    // toggle + reload graph ทันที
+    const toggleThaiOnly = useCallback(async () => {
+        const newVal = !thaiOnly;
+        setThaiOnly(newVal);
+        await loadGraphData(newVal);
+    }, [thaiOnly, loadGraphData]);
+
+    return { data, isLoading, loadGraphData, searchTikTok, syncDB, thaiOnly, toggleThaiOnly };
 }

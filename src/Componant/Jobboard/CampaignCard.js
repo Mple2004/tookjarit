@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import './Jobboard.css';
 
-const API = 'http://localhost:5000';
+const API = process.env.REACT_APP_API_URL || '';
 
 const JOB_TYPE_LABEL = {
     freelance: { text: 'ฟรีแลนซ์', color: '#6c5ce7', bg: '#f0eeff' },
