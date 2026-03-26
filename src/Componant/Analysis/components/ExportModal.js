@@ -30,7 +30,7 @@ function ExportModal({ isOpen, onClose, currentPlatform }) {
 
             const kwPart = keyword.trim() ? `&keyword=${keyword.trim()}` : '';
             const res = await fetch(
-                `http://localhost:5000/api/export-excel?${params.toString().replace(/%2C/g, ',')}${kwPart}`
+                `/api/export-excel?${params.toString().replace(/%2C/g, ',')}${kwPart}`
             );
             if (!res.ok) throw new Error(`Server error: ${res.status}`);
 

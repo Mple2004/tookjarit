@@ -14,7 +14,7 @@ import ExportButton       from '../components/ExportButton';
 import LoadingOverlay     from '../../LoadingOverlay';
 import { CATEGORIES, CATEGORY_COLOR_MAP } from '../constants/categories';
 
-const API = 'http://localhost:5000';
+const API = process.env.REACT_APP_API_URL || '';
 const PLATFORM_COLOR = '#cc0000';
 
 // ─── Node Helpers ───────────────────────────────────────────────────────────

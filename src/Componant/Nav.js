@@ -1,17 +1,33 @@
-// Componant/Nav.js — เพิ่มเมนู Jobboard
-import React from 'react';
+// Componant/Nav.js
+import React, { useState, useEffect } from 'react';
 import logoIcon from './img/logo/Logo.png';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 
 function Navbar() {
     const navigate  = useNavigate();
     const location  = useLocation();
-    const token     = localStorage.getItem('token');
+
+    // ✅ ใช้ state แทน — จะ re-render เมื่อ token เปลี่ยน
+    const [token, setToken] = useState(localStorage.getItem('token'));
+
+    // ✅ ฟัง storage event + location change เพื่อ sync token
+    useEffect(() => {
+        const syncToken = () => setToken(localStorage.getItem('token'));
+
+        // ฟัง storage event (กรณี tab อื่น login/logout)
+        window.addEventListener('storage', syncToken);
+
+        // sync ทุกครั้งที่ route เปลี่ยน (หลัง Google login navigate กลับมา)
+        syncToken();
+
+        return () => window.removeEventListener('storage', syncToken);
+    }, [location.pathname]); // ✅ re-sync เมื่อ path เปลี่ยน
 
     const handleLogout = () => {
         localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        setToken(null);
         navigate('/');
-        window.location.reload();
     };
 
     const isActive = (path) => location.pathname === path || location.pathname.startsWith(path + '/');
@@ -27,14 +43,12 @@ function Navbar() {
 
             {/* Menu */}
             <div style={styles.menu}>
-                <Link to="/" style={{ ...styles.navItem, ...(isActive('/') && location.pathname === '/' ? styles.navItemActive : {}) }}>
+                <Link to="/" style={{ ...styles.navItem, ...(location.pathname === '/' ? styles.navItemActive : {}) }}>
                     หน้าแรก
                 </Link>
                 <Link to="/analysis" style={{ ...styles.navItem, ...(isActive('/analysis') ? styles.navItemActive : {}) }}>
                     ค้นหาอินฟูฯ
                 </Link>
-
-                {/* ── NEW: Jobboard ── */}
                 <Link to="/jobboard" style={{ ...styles.navItem, ...(isActive('/jobboard') ? styles.navItemActive : {}) }}>
                     📋 Jobboard
                 </Link>
@@ -44,6 +58,7 @@ function Navbar() {
                         ⭐ Favorites
                     </Link>
                 )}
+
                 {token ? (
                     <button style={styles.navBtn} onClick={handleLogout}>ออกจากระบบ</button>
                 ) : (
@@ -58,17 +73,10 @@ function Navbar() {
 
 const styles = {
     nav: {
-        position: 'sticky',
-        top: 0,
-        zIndex: 200,
-        background: '#1a1a2e',
-        height: '64px',
-        padding: '0 32px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        boxShadow: '0 2px 20px rgba(0,0,0,0.3)',
-        fontFamily: "'Prompt', sans-serif",
+        position: 'sticky', top: 0, zIndex: 200,
+        background: '#1a1a2e', height: '64px', padding: '0 32px',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        boxShadow: '0 2px 20px rgba(0,0,0,0.3)', fontFamily: "'Prompt', sans-serif",
     },
     logoLink: { display: 'flex', alignItems: 'center', gap: '8px', textDecoration: 'none' },
     logoImg: { height: '32px', width: '32px', objectFit: 'contain' },

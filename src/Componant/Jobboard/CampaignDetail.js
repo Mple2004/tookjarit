@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import './Jobboard.css';
 
-const API = 'http://localhost:5000';
+const API = process.env.REACT_APP_API_URL || '';
 
 const JOB_TYPE_LABEL = {
     freelance: { text: 'ฟรีแลนซ์', color: '#6c5ce7', bg: '#f0eeff', icon: '💼' },
@@ -42,7 +42,6 @@ function getCurrentUserId() {
     } catch { return null; }
 }
 
-// แปลง URL ในข้อความให้เป็น clickable link
 function renderWithLinks(text) {
     if (!text) return null;
     const urlRegex = /(https?:\/\/[^\s]+)/g;
@@ -60,7 +59,6 @@ function renderWithLinks(text) {
     });
 }
 
-// Applicant card แบบ expandable
 function ApplicantCard({ applicant, index }) {
     const [expanded, setExpanded] = useState(false);
     const colors = ['#6c5ce7', '#00b894', '#e17055', '#0984e3', '#fd79a8', '#fdcb6e', '#a29bfe'];
@@ -108,6 +106,7 @@ function CampaignDetail() {
     const [deleting, setDeleting] = useState(false);
     const [toggling, setToggling] = useState(false);
     const [showApplicants, setShowApplicants] = useState(false);
+    const [lightboxOpen, setLightboxOpen] = useState(false);  // ✅ NEW
 
     const isLoggedIn = !!localStorage.getItem('token');
     const currentUserId = getCurrentUserId();
@@ -124,6 +123,13 @@ function CampaignDetail() {
             finally { setLoading(false); }
         })();
     }, [id, currentUserId]);
+
+    // ✅ NEW: ปิด lightbox ด้วย Escape
+    useEffect(() => {
+        const handleKey = (e) => { if (e.key === 'Escape') setLightboxOpen(false); };
+        if (lightboxOpen) window.addEventListener('keydown', handleKey);
+        return () => window.removeEventListener('keydown', handleKey);
+    }, [lightboxOpen]);
 
     const isOwner = campaign && currentUserId && campaign.author?.userId === currentUserId;
 
@@ -177,7 +183,14 @@ function CampaignDetail() {
         finally { setToggling(false); }
     };
 
-    if (loading) return <div className="jobboard-page"><div className="jobboard-loading"><div className="jobboard-spinner" /><p>กำลังโหลด...</p></div></div>;
+    if (loading) return (
+    <div className="jobboard-page">
+        <div className="jobboard-loading">
+            <div className="jobboard-spinner" />
+            <p>กำลังโหลด...</p>
+        </div>
+    </div>
+);
     if (!campaign) return (
         <div className="jobboard-page">
             <div className="jobboard-empty">
@@ -210,12 +223,89 @@ function CampaignDetail() {
                     <div className="detail-main">
                         {hasImages && (
                             <div className="detail-gallery">
-                                <img src={getImageUrl(c.images[currentImg])} alt={c.title} className="detail-main-image" onError={e => { e.target.style.display = 'none'; }} />
+                                <img
+                                    src={getImageUrl(c.images[currentImg])}
+                                    alt={c.title}
+                                    className="detail-main-image"
+                                    style={{ cursor: 'pointer' }}
+                                    onClick={() => setLightboxOpen(true)}
+                                    onError={e => { e.target.style.display = 'none'; }}
+                                />
                                 {c.images.length > 1 && (
                                     <div className="detail-thumbs">
                                         {c.images.map((img, i) => (
                                             <img key={i} src={getImageUrl(img)} alt="" className={`detail-thumb ${i === currentImg ? 'active' : ''}`} onClick={() => setCurrentImg(i)} />
                                         ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* ✅ NEW: Lightbox — คลิกรูปแล้วขยายเต็มจอ */}
+                        {lightboxOpen && hasImages && (
+                            <div
+                                onClick={() => setLightboxOpen(false)}
+                                style={{
+                                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                                    background: 'rgba(0,0,0,0.85)',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    zIndex: 99999, cursor: 'pointer',
+                                    animation: 'fadeIn 0.2s ease',
+                                }}
+                            >
+                                {/* ปุ่มปิด */}
+                                <div style={{
+                                    position: 'absolute', top: 20, right: 20,
+                                    color: '#fff', fontSize: 32, fontWeight: 300,
+                                    cursor: 'pointer', lineHeight: 1,
+                                }}>✕</div>
+
+                                {/* ปุ่มเลื่อนซ้าย */}
+                                {c.images.length > 1 && (
+                                    <div
+                                        onClick={(e) => { e.stopPropagation(); setCurrentImg(i => i > 0 ? i - 1 : c.images.length - 1); }}
+                                        style={{
+                                            position: 'absolute', left: 20, top: '50%', transform: 'translateY(-50%)',
+                                            color: '#fff', fontSize: 40, cursor: 'pointer',
+                                            background: 'rgba(255,255,255,0.15)', borderRadius: '50%',
+                                            width: 50, height: 50, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                        }}
+                                    >‹</div>
+                                )}
+
+                                {/* รูปเต็มจอ */}
+                                <img
+                                    src={getImageUrl(c.images[currentImg])}
+                                    alt={c.title}
+                                    onClick={(e) => e.stopPropagation()}
+                                    style={{
+                                        maxWidth: '90vw', maxHeight: '90vh',
+                                        objectFit: 'contain', borderRadius: 8,
+                                        cursor: 'default',
+                                    }}
+                                />
+
+                                {/* ปุ่มเลื่อนขวา */}
+                                {c.images.length > 1 && (
+                                    <div
+                                        onClick={(e) => { e.stopPropagation(); setCurrentImg(i => i < c.images.length - 1 ? i + 1 : 0); }}
+                                        style={{
+                                            position: 'absolute', right: 20, top: '50%', transform: 'translateY(-50%)',
+                                            color: '#fff', fontSize: 40, cursor: 'pointer',
+                                            background: 'rgba(255,255,255,0.15)', borderRadius: '50%',
+                                            width: 50, height: 50, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                        }}
+                                    >›</div>
+                                )}
+
+                                {/* ตัวบอกรูปที่เท่าไหร่ */}
+                                {c.images.length > 1 && (
+                                    <div style={{
+                                        position: 'absolute', bottom: 20,
+                                        color: '#fff', fontSize: 14, background: 'rgba(0,0,0,0.5)',
+                                        padding: '4px 14px', borderRadius: 20,
+                                    }}>
+                                        {currentImg + 1} / {c.images.length}
                                     </div>
                                 )}
                             </div>
@@ -238,7 +328,6 @@ function CampaignDetail() {
                             <p className="detail-desc-text">{c.description}</p>
                         </div>
 
-                        {/* Applicants (เจ้าของเท่านั้น) */}
                         {isOwner && (
                             <div className="applicants-section">
                                 <button className="applicants-toggle-btn" onClick={() => setShowApplicants(v => !v)}>
@@ -262,7 +351,6 @@ function CampaignDetail() {
 
                     {/* Sidebar */}
                     <div className="detail-sidebar">
-                        {/* Author */}
                         <div className="detail-side-card">
                             <div className="detail-author-row">
                                 <div className="campaign-card-avatar">{c.author?.name?.[0]?.toUpperCase() || '?'}</div>
@@ -273,7 +361,6 @@ function CampaignDetail() {
                             </div>
                         </div>
 
-                        {/* Contact — พร้อม clickable links */}
                         {c.contact && (
                             <div className="detail-side-card">
                                 <div style={{ fontSize: 13, fontWeight: 600, color: '#333', marginBottom: 10 }}>📞 ช่องทางการติดต่อ</div>
@@ -281,7 +368,6 @@ function CampaignDetail() {
                             </div>
                         )}
 
-                        {/* Budget */}
                         {c.budget > 0 && (
                             <div className="detail-side-card">
                                 <div className="detail-budget-label">งบประมาณ</div>
@@ -289,19 +375,15 @@ function CampaignDetail() {
                             </div>
                         )}
 
-                        {/* Applicant Count */}
                         <div className="detail-side-card">
                             <div style={{ fontSize: 13, color: '#888' }}>
                                 👥 ผู้สนใจ <strong style={{ color: applicantCount > 0 ? '#ff4757' : '#888' }}>{applicantCount}</strong> คน
                             </div>
                         </div>
 
-                        {/* Owner Controls */}
                         {isOwner && (
                             <div className="detail-side-card">
                                 <div style={{ fontSize: 13, fontWeight: 600, color: '#333', marginBottom: 12 }}>⚙️ จัดการแคมเปญ</div>
-
-                                {/* ปุ่มแก้ไข */}
                                 <button onClick={() => navigate(`/jobboard/${id}/edit`)}
                                     style={{
                                         width: '100%', padding: '12px 0', borderRadius: 50, border: 'none',
@@ -310,8 +392,6 @@ function CampaignDetail() {
                                     }}>
                                     ✏️ แก้ไขแคมเปญ
                                 </button>
-
-                                {/* ปุ่มเปิด/ปิด */}
                                 <button onClick={handleToggleStatus} disabled={toggling}
                                     style={{
                                         width: '100%', padding: '12px 0', borderRadius: 50, border: 'none',
@@ -322,8 +402,6 @@ function CampaignDetail() {
                                     }}>
                                     {toggling ? '...' : c.status === 'open' ? '⏸️ ปิดรับสมัคร' : '▶️ เปิดรับอีกครั้ง'}
                                 </button>
-
-                                {/* ปุ่มลบ */}
                                 <button onClick={handleDelete} disabled={deleting}
                                     style={{
                                         width: '100%', padding: '12px 0', borderRadius: 50,
@@ -336,7 +414,6 @@ function CampaignDetail() {
                             </div>
                         )}
 
-                        {/* Apply (ไม่ใช่เจ้าของ) */}
                         {!isOwner && (
                             <div className="detail-side-card">
                                 {applied ? (
@@ -350,7 +427,7 @@ function CampaignDetail() {
                                             value={message} onChange={e => setMessage(e.target.value)}
                                             className="detail-apply-textarea" rows={3} />
                                         <button className="detail-apply-btn" onClick={handleApply} disabled={applying}>
-                                            {applying ? 'กำลังสมัคร...' : isLoggedIn ? '🚀 เสนองาน' : 'เข้าสู่ระบบเพื่อสมัคร'}
+                                            {applying ? 'กำลังสมัคร...' : isLoggedIn ? '🚀 สนใจงานนี้' : 'เข้าสู่ระบบเพื่อสมัคร'}
                                         </button>
                                     </>
                                 )}

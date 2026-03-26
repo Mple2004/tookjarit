@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import './Jobboard.css';
 
-const API = 'http://localhost:5000';
+const API = process.env.REACT_APP_API_URL || '';
 
 const JOB_TYPE_LABEL = {
     freelance: { text: 'ฟรีแลนซ์', color: '#6c5ce7', bg: '#f0eeff' },

@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import ExportButton from './ExportButton';
 
-const API = 'http://localhost:5000';
+const API = process.env.REACT_APP_API_URL || '';
 const STALE_DAYS = 7;
 
 const TYPE_CONFIG = {
@@ -19,10 +19,12 @@ function daysSince(dateStr) {
 
 function formatRelative(dateStr) {
     if (!dateStr) return 'ไม่ทราบ';
-    const diff = Math.floor(daysSince(dateStr));
-    if (diff === 0) return 'วันนี้';
-    if (diff === 1) return 'เมื่อวาน';
-    return `${diff} วันที่แล้ว`;
+    return new Date(dateStr).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function formatDate(dateStr) {
+    if (!dateStr) return null;
+    return new Date(dateStr).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 function FilterToolbar({ localFilter, setLocalFilter, onRefresh, platform = 'tiktok', onSelectCategory }){
@@ -30,6 +32,7 @@ function FilterToolbar({ localFilter, setLocalFilter, onRefresh, platform = 'tik
     const [showDropdown, setShowDropdown] = useState(false);
     const [activeIdx,    setActiveIdx]    = useState(-1);
     const [lastUpdated,  setLastUpdated]  = useState(null);
+    const [lastRefreshed, setLastRefreshed] = useState(null);
     const [refreshing,   setRefreshing]   = useState(false);
 
     const inputRef    = useRef();
@@ -37,9 +40,14 @@ function FilterToolbar({ localFilter, setLocalFilter, onRefresh, platform = 'tik
 
     const fetchLastUpdated = useCallback(async () => {
         try {
-            const r = await fetch(`${API}/api/last-updated?platform=${platform || 'tiktok'}`);
-            const d = await r.json();
-            setLastUpdated(d.lastUpdated || null);
+            const [searchRes, refreshRes] = await Promise.all([
+                fetch(`${API}/api/last-updated?platform=${platform || 'tiktok'}`),
+                fetch(`${API}/api/last-refreshed?platform=${platform || 'tiktok'}`),
+            ]);
+            const searchData = await searchRes.json();
+            const refreshData = await refreshRes.json();
+            setLastUpdated(searchData.lastUpdated || null);
+            setLastRefreshed(refreshData.lastRefreshed || null);
         } catch {}
     }, [platform]);
 
@@ -72,7 +80,7 @@ function FilterToolbar({ localFilter, setLocalFilter, onRefresh, platform = 'tik
 
     const handleSelect = (item) => {
         if (item.type === 'category' && onSelectCategory) {
-            onSelectCategory(item.label); // ← ส่งไปให้ parent
+            onSelectCategory(item.label);
         } else {
             setLocalFilter(item.label);
         }
@@ -174,21 +182,24 @@ function FilterToolbar({ localFilter, setLocalFilter, onRefresh, platform = 'tik
                     <ExportButton currentPlatform={platform} />
                 </div>
 
-                <div className="ft-right__timestamp">
-                    <i className="fi fi-rr-clock ft-clock-icon" />
-                    {lastUpdated ? (
-                        <>
-                            <span>อัปเดตล่าสุด 🕐</span>
-                            <strong className={isStale ? 'ft-timestamp--stale' : ''}>
-                                {formatRelative(lastUpdated)}
-                            </strong>
-                            {isStale && (
-                                <span title="ข้อมูลเก่ากว่า 7 วันแล้ว — แนะนำให้ค้นหาใหม่">⚠️</span>
-                            )}
-                        </>
-                    ) : (
-                        <span className="ft-timestamp--empty">ยังไม่มีข้อมูล</span>
-                    )}
+                <div className="ft-right__timestamp" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {/* บรรทัด 1: ค้นหาล่าสุด */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#888' }}>
+                        <span>🔎 ค้นหาล่าสุด</span>
+                        <strong style={{ color: isStale ? '#e17055' : '#555' }}>
+                            {lastUpdated ? formatRelative(lastUpdated) : 'ยังไม่มีข้อมูล'}
+                        </strong>
+                        {isStale && lastUpdated && (
+                            <span title="ข้อมูลเก่ากว่า 7 วัน — แนะนำให้ค้นหาใหม่">⚠️</span>
+                        )}
+                    </div>
+                    {/* บรรทัด 2: อัพเดตยอดล่าสุด */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#aaa' }}>
+                        <span>📊 ข้อมูลภายในกราฟล่าสุด</span>
+                        <strong style={{ color: lastRefreshed ? '#00b894' : '#ccc' }}>
+                            {lastRefreshed ? formatDate(lastRefreshed) : 'ยังไม่เคยอัพเดต'}
+                        </strong>
+                    </div>
                 </div>
             </div>
         </div>

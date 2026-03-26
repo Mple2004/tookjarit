@@ -2,6 +2,8 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
+const API = process.env.REACT_APP_API_URL || '';
+
 function Favorites() {
     const [favorites, setFavorites] = useState([]);
     const [avatars, setAvatars]     = useState({});
@@ -12,32 +14,54 @@ function Favorites() {
     useEffect(() => {
         const token = localStorage.getItem('token');
         if (!token) { navigate('/login'); return; }
-        fetch('http://localhost:5000/api/favorites', {
+
+        fetch(`${API}/api/favorites`, {  // ✅ เพิ่ม API base URL
             headers: { Authorization: `Bearer ${token}` },
         })
-            .then(r => r.json())
+            .then(async r => {
+                // ✅ เช็ค 401 ก่อน — token หมดอายุหรือไม่ถูกต้อง
+                if (r.status === 401) {
+                    localStorage.removeItem('token');
+                    localStorage.removeItem('user');
+                    navigate('/login');
+                    return null;
+                }
+                return r.json();
+            })
             .then(async data => {
-                if (data.message) { navigate('/login'); return; }
+                if (!data) return;
+
+                // ✅ เช็คว่ามี favorites จริงๆ ไม่ใช่แค่เช็ค message
+                if (!data.favorites && data.message) {
+                    console.error('Favorites error:', data.message);
+                    navigate('/login');
+                    return;
+                }
+
                 const favs = data.favorites || [];
                 setFavorites(favs);
                 setUserName(data.name || '');
+
                 const avatarMap = {};
                 await Promise.all(favs.map(async fav => {
                     try {
-                        const r = await fetch(`http://localhost:5000/api/avatar/${encodeURIComponent(fav.influencerName)}`);
+                        const r = await fetch(`${API}/api/avatar/${encodeURIComponent(fav.influencerName)}`);
                         const d = await r.json();
                         if (d.avatar) avatarMap[fav.influencerName] = d.avatar;
                     } catch {}
                 }));
                 setAvatars(avatarMap);
             })
-            .catch(() => navigate('/login'))
+            .catch((err) => {
+                console.error('Favorites fetch error:', err);
+                navigate('/login');
+            })
             .finally(() => setLoading(false));
     }, [navigate]);
 
     const removeFavorite = async (influencerName) => {
         const token = localStorage.getItem('token');
-        await fetch('http://localhost:5000/api/favorites/toggle', {
+        await fetch(`${API}/api/favorites/toggle`, {  // ✅ เพิ่ม API base URL
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
             body: JSON.stringify({ influencerName }),
@@ -75,10 +99,7 @@ function Favorites() {
                     <p className="empty-state__sub">
                         ไปที่หน้า Analysis แล้วกดดาวที่ Influencer ที่ชอบได้เลยครับ
                     </p>
-                    <button
-                        className="btn btn--primary"
-                        onClick={() => navigate('/analysis')}
-                    >
+                    <button className="btn btn--primary" onClick={() => navigate('/analysis')}>
                         ไปหน้า Analysis →
                     </button>
                 </div>
@@ -94,36 +115,24 @@ function Favorites() {
 
                         return (
                             <div key={i} className="fav-card">
-                                {/* Avatar */}
-                                <div
-                                    className="fav-card__avatar"
-                                    style={{ background: avatarBg }}
-                                >
+                                <div className="fav-card__avatar" style={{ background: avatarBg }}>
                                     {avatars[fav.influencerName] ? (
-                                        <img
-                                            src={avatars[fav.influencerName]}
-                                            alt={fav.influencerName}
-                                        />
+                                        <img src={avatars[fav.influencerName]} alt={fav.influencerName} />
                                     ) : (
                                         <span>{fav.influencerName.charAt(0).toUpperCase()}</span>
                                     )}
                                 </div>
 
-                                {/* Info */}
                                 <div className="fav-card__info">
                                     <p className="fav-card__name">@{fav.influencerName}</p>
                                     <p className="fav-card__meta">
-                                        <span
-                                            className="fav-card__badge"
-                                            style={{ background: badgeBg }}
-                                        >
+                                        <span className="fav-card__badge" style={{ background: badgeBg }}>
                                             {isTikTok ? '🎵 TikTok' : '▶️ YouTube'}
                                         </span>
                                         บันทึกเมื่อ {new Date(fav.addedAt).toLocaleDateString('th-TH')}
                                     </p>
                                 </div>
 
-                                {/* Actions */}
                                 <div className="fav-card__actions">
                                     <button
                                         className="fav-card__view-btn"

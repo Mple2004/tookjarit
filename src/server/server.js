@@ -12,18 +12,25 @@ const bcrypt = require('bcryptjs');
 const User = require('./User');
 const SearchHistory = require('./SearchHistory');
 const axios = require('axios'); //mp
+const Campaign = require('./Campaign');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');       // ✅ NEW: สำหรับ reset token
+const nodemailer = require('nodemailer'); // ✅ NEW: สำหรับส่ง email
 
 const JWT_SECRET = process.env.JWT_SECRET || 'tookjarit-secret-key-2024';
 
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 const YOUTUBE_SERVICE = process.env.YOUTUBE_SERVICE_URL || 'http://localhost:5001';
 
 // --- Setup Clients ---
 const apifyClient = new ApifyClient({ token: process.env.APIFY_API_TOKEN });
+const apifyRefreshClient = new ApifyClient({ token: process.env.APIFY_REFRESH_TOKEN || process.env.APIFY_API_TOKEN });
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const driver = neo4j.driver(
     process.env.NEO4J_URI,
@@ -106,6 +113,7 @@ app.post('/api/search-tiktok', async (req, res) => {
                 videoId: item.id, authorName: item.authorMeta?.name || "Unknown",
                 authorAvatar: item.authorMeta?.avatar || "", followers: item.authorMeta?.fans || 0,
                 platform: 'tiktok', caption: item.text || "", videoUrl: item.webVideoUrl || "",
+                textLanguage: item.textLanguage || '',
                 totalViews: item.playCount || 0, totalLikes: item.diggCount || 0,
                 totalComments: item.commentCount || 0, totalShares: item.shareCount || 0,
                 brand: analysis.brand || "Unknown", productType: analysis.product_type || "Unknown",
@@ -177,19 +185,23 @@ app.get('/api/last-updated', async (req, res) => {
 // ─────────────────────────────────────────
 app.get('/api/graph-data', async (req, res) => {
     const platform = req.query.platform || 'tiktok';
+    // ✅ ถ้า thaiOnly → หา influencer ที่มีโพสต์ภาษาไทยจาก MongoDB
+    const thaiOnly = req.query.thaiOnly === 'true';
      // ✅ เลือก driver ตาม platform
     const selectedDriver = platform === 'youtube' ? driverYoutube : driver;
-
     const session = selectedDriver.session();
     try {
-        // const result = await session.run(`
-        //     MATCH (i:Influencer)-[r:POSTED_ABOUT]->(b:Brand)
-        //     WHERE i.platform = $platform
-        //     RETURN i, r, b,
-        //            sum(r.totalLikes) AS sumLikes,
-        //            sum(r.totalViews) AS sumViews
-        //     LIMIT 1000
-        // `, { platform });
+        // เช็ค 2 เงื่อนไข: textLanguage = 'th' หรือ caption มีตัวอักษรไทย
+        let thaiInfluencerNames = null;
+        if (thaiOnly) {
+            const thaiRegex = /[\u0E00-\u0E7F]/;  // ตัวอักษรไทย ก-๙
+            const allInfluencers = await Influencer.find({ platform }).select('authorName textLanguage caption').lean();
+            const thaiNames = allInfluencers
+                .filter(inf => inf.textLanguage === 'th' || thaiRegex.test(inf.caption || ''))
+                .map(inf => inf.authorName);
+            thaiInfluencerNames = new Set(thaiNames);
+        }
+
         const result = await session.run(`
             MATCH (i:Influencer)-[r]->(b:Brand)
             WHERE i.platform = $platform
@@ -205,9 +217,15 @@ app.get('/api/graph-data', async (req, res) => {
             const i = rec.get('i');
             const b = rec.get('b');
             const r = rec.get('r');
-
-            // สะสม totalLikes/totalViews ต่อ influencer
             const iId = i.elementId;
+            // ✅ thaiOnly → ข้ามถ้า influencer ไม่มีโพสต์ไทย
+            if (thaiInfluencerNames && !thaiInfluencerNames.has(i.properties.name)) return;
+
+            const rViews    = r.properties.totalViews?.low    ?? r.properties.totalViews    ?? 0;
+            const rLikes    = r.properties.totalLikes?.low    ?? r.properties.totalLikes    ?? 0;
+            const rComments = r.properties.totalComments?.low ?? r.properties.totalComments ?? 0;
+            const rShares   = r.properties.totalShares?.low   ?? r.properties.totalShares   ?? 0;
+
             if (!influencerStats[iId]) influencerStats[iId] = { totalLikes: 0, totalViews: 0 };
             influencerStats[iId].totalLikes += parseInt(r.properties.totalLikes) || 0;
             influencerStats[iId].totalViews += parseInt(r.properties.totalViews) || 0;
@@ -233,13 +251,6 @@ app.get('/api/graph-data', async (req, res) => {
                 });
                 seen.add(b.elementId);
             }
-            // links.push({
-            //     source: iId,
-            //     target: b.elementId,
-            //     weight: r.properties.weight?.low || 1,
-            //     totalViews: r.properties.totalViews?.low || r.properties.totalViews || 0,
-            //     totalLikes: r.properties.totalLikes?.low || r.properties.totalLikes || 0,
-            // });
             links.push({
                 source: iId,
                 target: b.elementId,
@@ -379,6 +390,7 @@ app.post('/api/auth/login', async (req, res) => {
         const { email, password } = req.body;
         const user = await User.findOne({ email });
         if (!user) return res.status(400).json({ message: 'ไม่พบอีเมลนี้ในระบบ' });
+        if (!user.password) return res.status(400).json({ message: 'บัญชีนี้ใช้ Google Login กรุณาเข้าสู่ระบบด้วย Google' });
         if (!(await user.comparePassword(password))) return res.status(400).json({ message: 'รหัสผ่านไม่ถูกต้อง' });
         const token = jwt.sign({ id: user._id, name: user.name, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
         res.json({ token, user: { id: user._id, name: user.name, email: user.email } });
@@ -386,7 +398,118 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // ─────────────────────────────────────────
-// API: Favorites — ✅ บันทึก platform ด้วย
+// API: Google Login
+// ─────────────────────────────────────────
+app.post('/api/auth/google', async (req, res) => {
+    const { credential } = req.body;
+    if (!credential) return res.status(400).json({ message: 'ไม่พบข้อมูล Google' });
+    try {
+        // Decode Google JWT token
+        const decoded = JSON.parse(Buffer.from(credential.split('.')[1], 'base64').toString());
+        const { sub: googleId, email, name, picture } = decoded;
+
+        if (!email) return res.status(400).json({ message: 'ไม่สามารถดึงอีเมลจาก Google ได้' });
+
+        // หา user หรือสร้างใหม่
+        let user = await User.findOne({ $or: [{ googleId }, { email }] });
+        if (user) {
+            // อัพเดต googleId ถ้ายังไม่มี
+            if (!user.googleId) { user.googleId = googleId; await user.save(); }
+        } else {
+            // สร้าง user ใหม่ (ไม่มี password)
+            user = await User.create({ name, email, googleId });
+        }
+
+        const token = jwt.sign({ id: user._id, name: user.name, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+        res.json({ token, user: { id: user._id, name: user.name, email: user.email } });
+    } catch (e) {
+        console.error('❌ Google login error:', e.message);
+        res.status(500).json({ message: 'เข้าสู่ระบบด้วย Google ไม่สำเร็จ' });
+    }
+});
+
+// ─────────────────────────────────────────
+// API: Forgot Password (ส่ง email reset link)
+// ─────────────────────────────────────────
+app.post('/api/auth/forgot-password', async (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ message: 'กรุณากรอกอีเมล' });
+    try {
+        const user = await User.findOne({ email });
+        if (!user) return res.status(400).json({ message: 'ไม่พบอีเมลนี้ในระบบ' });
+        if (!user.password && user.googleId) return res.status(400).json({ message: 'บัญชีนี้ใช้ Google Login ไม่จำเป็นต้อง reset รหัสผ่าน' });
+
+        // สร้าง reset token
+        const resetToken = crypto.randomBytes(32).toString('hex');
+        user.resetPasswordToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+        user.resetPasswordExpires = Date.now() + 30 * 60 * 1000; // 30 นาที
+        await user.save();
+
+        // ส่ง email
+        const appUrl = process.env.APP_URL || 'http://localhost:3000';
+        const resetUrl = `${appUrl}/reset-password/${resetToken}`;
+
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                user: process.env.SMTP_EMAIL,
+                pass: process.env.SMTP_PASSWORD,
+            },
+        });
+
+        await transporter.sendMail({
+            from: `"TookJaRit" <${process.env.SMTP_EMAIL}>`,
+            to: email,
+            subject: '🔑 รีเซ็ตรหัสผ่าน TookJaRit',
+            html: `
+                <div style="font-family: 'Prompt', sans-serif; max-width: 500px; margin: 0 auto; padding: 30px; background: #fff; border-radius: 16px; border: 1px solid #f0f0f0;">
+                    <h2 style="color: #1a1a2e; margin-bottom: 10px;">🔑 รีเซ็ตรหัสผ่าน</h2>
+                    <p style="color: #666; font-size: 14px;">คุณได้ขอรีเซ็ตรหัสผ่านสำหรับบัญชี TookJaRit</p>
+                    <a href="${resetUrl}" style="display: inline-block; margin: 20px 0; padding: 14px 32px; background: #ff4757; color: #fff; text-decoration: none; border-radius: 50px; font-weight: 600; font-size: 14px;">ตั้งรหัสผ่านใหม่</a>
+                    <p style="color: #999; font-size: 12px;">ลิงก์นี้จะหมดอายุใน 30 นาที</p>
+                    <p style="color: #ccc; font-size: 11px; margin-top: 20px;">ถ้าคุณไม่ได้ขอรีเซ็ตรหัสผ่าน กรุณาเพิกเฉยอีเมลนี้</p>
+                </div>
+            `,
+        });
+
+        console.log(`📧 Reset email sent to ${email}`);
+        res.json({ message: 'ส่งลิงก์รีเซ็ตรหัสผ่านไปที่อีเมลแล้ว' });
+    } catch (e) {
+        console.error('❌ Forgot password error:', e.message);
+        res.status(500).json({ message: 'ส่งอีเมลไม่สำเร็จ กรุณาลองใหม่' });
+    }
+});
+
+// ─────────────────────────────────────────
+// API: Reset Password (ตั้งรหัสผ่านใหม่)
+// ─────────────────────────────────────────
+app.post('/api/auth/reset-password', async (req, res) => {
+    const { token, password } = req.body;
+    if (!token || !password) return res.status(400).json({ message: 'ข้อมูลไม่ครบ' });
+    if (password.length < 6) return res.status(400).json({ message: 'รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร' });
+    try {
+        const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+        const user = await User.findOne({
+            resetPasswordToken: hashedToken,
+            resetPasswordExpires: { $gt: Date.now() },
+        });
+        if (!user) return res.status(400).json({ message: 'ลิงก์หมดอายุหรือไม่ถูกต้อง กรุณาขอรีเซ็ตใหม่' });
+
+        user.password = password;
+        user.resetPasswordToken = undefined;
+        user.resetPasswordExpires = undefined;
+        await user.save();
+
+        console.log(`✅ Password reset for ${user.email}`);
+        res.json({ message: 'เปลี่ยนรหัสผ่านสำเร็จ กรุณาเข้าสู่ระบบใหม่' });
+    } catch (e) {
+        console.error('❌ Reset password error:', e.message);
+        res.status(500).json({ message: e.message });
+    }
+});
+
+// ─────────────────────────────────────────
+// API: Favorites
 // ─────────────────────────────────────────
 app.post('/api/favorites/toggle', authMiddleware, async (req, res) => {
     try {
@@ -871,5 +994,248 @@ app.get('/api/top-videos-by-brand', async (req, res) => {
     }
 });
 
-const PORT = 5000;
+// ─────────────────────────────────────────
+// API: Import TikTok JSON (จากไฟล์ Apify ที่โหลดไว้)
+// ─────────────────────────────────────────
+app.post('/api/import-tiktok-json', async (req, res) => {
+    const { items: rawItems, thaiOnly = false } = req.body;
+    if (!rawItems || !Array.isArray(rawItems) || rawItems.length === 0) {
+        return res.status(400).json({ error: "กรุณาส่ง items array มาด้วย" });
+    }
+    console.log(`📥 Import TikTok JSON: ${rawItems.length} items | thaiOnly: ${thaiOnly}`);
+    try {
+        const items = thaiOnly ? rawItems.filter(item => item.textLanguage === 'th') : rawItems;
+        if (items.length === 0) return res.status(404).json({ message: "ไม่พบโพสต์ภาษาไทยในไฟล์นี้" });
+
+        const BATCH_SIZE = 15;
+        let allAnalysis = [];
+        for (let start = 0; start < items.length; start += BATCH_SIZE) {
+            const batch = items.slice(start, start + BATCH_SIZE);
+            const dataForAI = batch.map(item => ({ id: item.id, text: item.text, author_name: item.authorMeta?.name || "Unknown" }));
+            const prompt = `Analyze TikTok captions. Input: ${JSON.stringify(dataForAI)}
+            Tasks:
+            1. brand: Extract Brand Name (if specific brand is not found, use "No Brand").
+            2. product_type: Identify the specific object and **Translate to Thai**.
+            3. main_category: Choose ONE best category from: Fashion, Beauty & Personal Care, Health & Wellness, Food & Beverage, Mom & Kids, IT & Gadgets, Home & Living, Toys & Collectibles, Pet, Automotive, Lifestyle
+            Output: JSON Array ONLY. No markdown. Preserve "id".
+            Structure: [{ "id": "...", "brand": "...", "product_type": "...", "main_category": "..." }]`;
+            const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+            const result = await model.generateContent(prompt);
+            const parsed = JSON.parse(result.response.text().replace(/```json/g, '').replace(/```/g, '').trim());
+            allAnalysis = allAnalysis.concat(parsed);
+            console.log(`   🤖 Gemini batch ${Math.floor(start / BATCH_SIZE) + 1}: ${parsed.length} analyzed`);
+        }
+
+        const processedData = items.map(item => {
+            const analysis = allAnalysis.find(a => a.id === item.id) || {};
+            return {
+                videoId: item.id, authorName: item.authorMeta?.name || "Unknown",
+                authorAvatar: item.authorMeta?.avatar || "", followers: item.authorMeta?.fans || 0,
+                profileLikes: item.authorMeta?.heart || 0,
+                platform: 'tiktok', caption: item.text || "", videoUrl: item.webVideoUrl || "",
+                textLanguage: item.textLanguage || '',
+                totalViews: item.playCount || 0, totalLikes: item.diggCount || 0,
+                totalComments: item.commentCount || 0, totalShares: item.shareCount || 0,
+                brand: analysis.brand || "Unknown", productType: analysis.product_type || "Unknown",
+                category: analysis.main_category || "Lifestyle"
+            };
+        });
+
+        try { await Influencer.insertMany(processedData, { ordered: false }); }
+        catch (e) { if (e.code !== 11000) console.error(e); }
+
+        const session = driver.session();
+        try {
+            await session.run(`
+                UNWIND $batch AS row
+                MERGE (i:Influencer {name: row.authorName})
+                ON CREATE SET i.followers = row.followers, i.authorAvatar = row.authorAvatar, i.platform = row.platform, i.profileLikes = row.profileLikes
+                ON MATCH SET  i.followers = row.followers, i.authorAvatar = row.authorAvatar, i.platform = row.platform, i.profileLikes = row.profileLikes
+                MERGE (b:Brand {name: row.finalBrand})
+                ON CREATE SET b.category = row.category
+                ON MATCH SET  b.category = row.category
+                MERGE (i)-[r:POSTED_ABOUT]->(b)
+                ON CREATE SET r.weight = 1, r.totalViews = row.totalViews, r.totalLikes = row.totalLikes, r.totalComments = row.totalComments, r.totalShares = row.totalShares
+                ON MATCH SET  r.weight = r.weight + 1, r.totalViews = COALESCE(r.totalViews,0) + row.totalViews, r.totalLikes = COALESCE(r.totalLikes,0) + row.totalLikes, r.totalComments = COALESCE(r.totalComments,0) + row.totalComments, r.totalShares = COALESCE(r.totalShares,0) + row.totalShares
+            `, { batch: processedData.map(d => ({ ...d, finalBrand: getDisplayBrand(d.brand, d.productType) })) });
+        } finally { await session.close(); }
+
+        console.log(`✅ Import done: ${processedData.length} items`);
+        res.json({ message: `นำเข้า ${processedData.length} รายการสำเร็จ`, imported: processedData.length });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─────────────────────────────────────────
+// API: Refresh Influencer Stats (อัพเดตยอด followers/likes/views จาก TikTok)
+// ─────────────────────────────────────────
+app.post('/api/refresh-stats', async (req, res) => {
+    const { maxVideos = 100, staleDays = 30 } = req.body || {};
+    const staleDate = new Date(Date.now() - staleDays * 24 * 60 * 60 * 1000);
+
+    console.log(`🔄 Refresh Stats | maxVideos: ${maxVideos} | staleDays: ${staleDays}`);
+
+    try {
+        // 1. หาคลิปที่ยังไม่เคย sync หรือ sync เกิน X วัน
+        const staleVideos = await Influencer.find({
+            platform: 'tiktok',
+            videoUrl: { $exists: true, $ne: '' },
+            $or: [
+                { lastSynced: null },
+                { lastSynced: { $lt: staleDate } },
+            ]
+        })
+        .sort({ lastSynced: 1 })
+        .limit(maxVideos)
+        .select('videoUrl videoId authorName')
+        .lean();
+
+        if (staleVideos.length === 0) {
+            return res.json({ message: 'ทุกคลิปอัพเดตแล้ว ไม่มีอะไรต้อง refresh', refreshed: 0 });
+        }
+
+        console.log(`   📋 พบ ${staleVideos.length} คลิปที่ต้องอัพเดต`);
+
+        // 2. Scrape ด้วย postURLs — ตรง videoId 100%
+        const BATCH_SIZE = 20;  // Apify รับ URL ได้หลายอันต่อ call
+        let totalUpdated = 0;
+
+        for (let i = 0; i < staleVideos.length; i += BATCH_SIZE) {
+            const batch = staleVideos.slice(i, i + BATCH_SIZE);
+            const postURLs = batch.map(v => v.videoUrl);
+
+            console.log(`   🔎 Batch ${Math.floor(i / BATCH_SIZE) + 1}: ${batch.length} URLs`);
+
+            try {
+                const input = {
+                    postURLs,
+                    resultsPerPage: 1,
+                    shouldDownloadCovers: false,
+                    shouldDownloadSlideshowImages: false,
+                    shouldDownloadSubtitles: false,
+                    shouldDownloadVideos: false,
+                };
+                const run = await apifyRefreshClient.actor("clockworks/free-tiktok-scraper").call(input);
+                const { items } = await apifyRefreshClient.dataset(run.defaultDatasetId).listItems();
+
+                if (!items || items.length === 0) {
+                    console.log(`   ⚠️ Batch ${Math.floor(i / BATCH_SIZE) + 1}: ไม่ได้ data`);
+                    continue;
+                }
+
+                // 3. อัพเดต MongoDB — ยอดคลิป + followers/avatar
+                for (const item of items) {
+                    const authorName = item.authorMeta?.name;
+                    if (!authorName) continue;
+
+                    // อัพเดต followers/avatar ทุก record ของ influencer นี้
+                    await Influencer.updateMany(
+                        { authorName, platform: 'tiktok' },
+                        {
+                            $set: {
+                                followers: item.authorMeta?.fans || 0,
+                                profileLikes: item.authorMeta?.heart || 0,
+                                authorAvatar: item.authorMeta?.avatar || '',
+                                lastSynced: new Date(),
+                            }
+                        }
+                    );
+
+                    // อัพเดตยอดคลิปตรง videoId
+                    if (item.id) {
+                        await Influencer.updateOne(
+                            { videoId: item.id, platform: 'tiktok' },
+                            {
+                                $set: {
+                                    totalViews: item.playCount || 0,
+                                    totalLikes: item.diggCount || 0,
+                                    totalComments: item.commentCount || 0,
+                                    totalShares: item.shareCount || 0,
+                                    textLanguage: item.textLanguage || '',
+                                }
+                            }
+                        );
+                        totalUpdated++;
+                    }
+                }
+
+                console.log(`   ✅ Batch done: ${items.length} items updated`);
+
+            } catch (batchErr) {
+                console.error(`   ❌ Batch error:`, batchErr.message);
+            }
+        }
+
+        // 4. Sync ไป Neo4j
+        if (totalUpdated > 0) {
+            const updatedNames = [...new Set(staleVideos.map(v => v.authorName))];
+            const freshData = await Influencer.find({
+                authorName: { $in: updatedNames },
+                platform: 'tiktok',
+            });
+
+            const session = driver.session();
+            try {
+                await session.run(`
+                    UNWIND $batch AS row
+                    MERGE (i:Influencer {name: row.authorName})
+                    SET i.followers = row.followers, i.authorAvatar = row.authorAvatar,
+                        i.profileLikes = row.profileLikes
+                    WITH i, row
+                    MERGE (b:Brand {name: row.finalBrand})
+                    MERGE (i)-[r:POSTED_ABOUT]->(b)
+                    SET r.totalViews = row.totalViews, r.totalLikes = row.totalLikes,
+                        r.totalComments = row.totalComments, r.totalShares = row.totalShares
+                `, {
+                    batch: freshData.map(inf => ({
+                        authorName: inf.authorName,
+                        authorAvatar: inf.authorAvatar || '',
+                        followers: inf.followers || 0,
+                        profileLikes: inf.profileLikes || 0,
+                        totalViews: inf.totalViews || 0,
+                        totalLikes: inf.totalLikes || 0,
+                        totalComments: inf.totalComments || 0,
+                        totalShares: inf.totalShares || 0,
+                        finalBrand: getDisplayBrand(inf.brand, inf.productType),
+                    }))
+                });
+            } finally { await session.close(); }
+        }
+
+        console.log(`🔄 Refresh done: ${totalUpdated}/${staleVideos.length} clips updated`);
+        res.json({
+            message: `อัพเดตสำเร็จ ${totalUpdated} คลิป`,
+            refreshed: totalUpdated,
+            total: staleVideos.length,
+        });
+
+    } catch (e) {
+        console.error('❌ Refresh error:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ─────────────────────────────────────────
+// API: Last Refreshed (วันที่อัพเดตยอดล่าสุด)
+// ─────────────────────────────────────────
+app.get('/api/last-refreshed', async (req, res) => {
+    const platform = req.query.platform || 'tiktok';
+    try {
+        const latest = await Influencer.findOne({ platform, lastSynced: { $ne: null } })
+            .sort({ lastSynced: -1 })
+            .select('lastSynced')
+            .lean();
+        res.json({ lastRefreshed: latest?.lastSynced || null });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+const PORT = process.env.PORT || 5000;
+
+const buildPath = path.join(__dirname, '..', '..', 'build');
+app.use(express.static(buildPath));
+app.get('*', (req, res) => {
+    if (!req.path.startsWith('/api') && !req.path.startsWith('/uploads')) {
+        res.sendFile(path.join(buildPath, 'index.html'));
+    }
+});
+
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));

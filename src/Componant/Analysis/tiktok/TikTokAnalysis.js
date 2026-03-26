@@ -10,9 +10,9 @@ import { useAvatarCache } from '../hooks/useAvatarCache';
 import NodePopupCard from './NodePopupCard';
 import FilterToolbar from '../components/FilterToolbar';
 import LoadingOverlay from '../../LoadingOverlay';
-import { CATEGORIES, CATEGORY_COLOR_MAP } from '../constants/categories';
+import { CATEGORIES, CATEGORY_COLOR_MAP, FOLLOWER_TIERS } from '../constants/categories';
 
-const API = 'http://localhost:5000';
+const API = process.env.REACT_APP_API_URL || '';
 const PLATFORM_COLOR = '#1a1a2e';
 
 // ─── Node Helpers ─────────────────────────────────────────────────────────────
@@ -48,7 +48,7 @@ function calcRating(link, allLinks) {
     return (calcRawScore(link) / maxRaw) * 10;
 }
 
-// ─── Link Width (based on raw score, global scale) ───────────────────────────
+// ─── Link Width ──────────────────────────────────────────────────────────────
 function getLinkWidth(link, allLinks) {
     if (link.isPhantom) return 0;
     if (!allLinks || allLinks.length === 0) return 1.5;
@@ -71,6 +71,29 @@ function getTier(followers) {
     if (followers >= 10_000) return { label: '✨ Micro', color: '#00b894' };
     if (followers >= 1_000) return { label: '🌱 Nano', color: '#74b9ff' };
     return { label: '🔰 New', color: '#b2bec3' };
+}
+
+// ─── Tier matching ───────────────────────────────────────────────────────────
+function matchesTier(node, selectedTier) {
+    if (!selectedTier) return true;
+    if (node.type !== 'Influencer') return true;
+    const tier = FOLLOWER_TIERS.find(t => t.key === selectedTier);
+    if (!tier) return true;
+    const f = node.followers || 0;
+    return f >= tier.min && f <= tier.max;
+}
+
+// ─── Category matching (for filter interactions) ─────────────────────────────
+function nodeMatchesCategory(node, category, links) {
+    if (!category) return true;
+    if (node.category === category) return true;
+    if (node.type === 'Influencer') {
+        return links.some(l =>
+            (l.source?.id === node.id || l.target?.id === node.id) &&
+            (l.source?.category === category || l.target?.category === category)
+        );
+    }
+    return false;
 }
 
 // ─── Link Tooltip ─────────────────────────────────────────────────────────────
@@ -142,7 +165,7 @@ function TikTokAnalysis() {
     const fgRef = useRef();
     const containerRef = useRef();
 
-    const { data, isLoading, loadGraphData, searchTikTok } = useGraphData();
+    const { data, isLoading, loadGraphData, searchTikTok, thaiOnly, toggleThaiOnly } = useGraphData();
     const { highlightNodes, highlightLinks, hoverNode, setHoverNode, updateHighlights, clearHighlights } = useHighlight(data.links);
     const { imgCache, loadAvatarForNode } = useAvatarCache(fgRef);
 
@@ -152,6 +175,7 @@ function TikTokAnalysis() {
     const [globalSearch, setGlobalSearch] = useState('');
     const [localFilter, setLocalFilter] = useState('');
     const [selectedCategory, setSelectedCategory] = useState('');
+    const [selectedTier, setSelectedTier] = useState('');
 
     const [hoverLink, setHoverLink] = useState(null);
     const [linkTooltipPos, setLinkTooltipPos] = useState(null);
@@ -207,12 +231,19 @@ function TikTokAnalysis() {
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [konamiProgress]);
 
-    // ── Physics ────────────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════
+    // ★ Physics — tuned for spacing + category grouping (NO cluster force)
+    //   phantom links ดึง brand หมวดเดียวกันเข้าหากัน (short + strong)
+    //   real links ห่างขึ้น (long + weak) → influencer กระจายรอบ
+    //   charge แรง → ผลักออกจากกัน ไม่ซ้อน
+    // ══════════════════════════════════════════════════════════════════════
     useEffect(() => {
         if (!fgRef.current) return;
-        fgRef.current.d3Force('charge', d3.forceManyBody().strength(-300));
-        fgRef.current.d3Force('collide', d3.forceCollide().radius(n => getNodeSize(n) + 15).iterations(3));
-        fgRef.current.d3Force('link').distance(l => l.isPhantom ? 50 : 150);
+        fgRef.current.d3Force('charge', d3.forceManyBody().strength(-800).distanceMax(1000));
+        fgRef.current.d3Force('collide', d3.forceCollide().radius(n => getNodeSize(n) + 30).iterations(4));
+        fgRef.current.d3Force('link')
+            .distance(l => l.isPhantom ? 40 : 200)
+            .strength(l => l.isPhantom ? 0.4 : 0.3);
         fgRef.current.d3ReheatSimulation();
     }, [data, dimensions]);
 
@@ -233,7 +264,7 @@ function TikTokAnalysis() {
         };
     }, [isFullScreen]);
 
-    // ── ✅ FIX: Auto Zoom Fit — เช็ค fgRef ข้างใน setTimeout + cleanup ───
+    // ── Auto Zoom Fit ─────────────────────────────────────────────────────
     useEffect(() => {
         const timer = setTimeout(() => {
             if (fgRef.current) fgRef.current.zoomToFit(1000, 50);
@@ -241,21 +272,14 @@ function TikTokAnalysis() {
         return () => clearTimeout(timer);
     }, [data]);
 
-    // ── ✅ FIX: Zoom to Category — รวมเป็นอันเดียว + cleanup ──────────────
+    // ── Zoom to Category ──────────────────────────────────────────────────
     useEffect(() => {
         if (!selectedCategory || !fgRef.current || !data.nodes.length) return;
-        const catNodes = data.nodes.filter(node => {
-            if (node.category === selectedCategory) return true;
-            if (node.type === 'Influencer') {
-                return data.links.some(l => {
-                    const src = typeof l.source === 'object' ? l.source : data.nodes.find(n => n.id === l.source);
-                    const tgt = typeof l.target === 'object' ? l.target : data.nodes.find(n => n.id === l.target);
-                    return (src?.id === node.id && tgt?.category === selectedCategory) ||
-                        (tgt?.id === node.id && src?.category === selectedCategory);
-                });
-            }
-            return false;
-        });
+        setSelectedNode(null);
+        setHoverNode(null);
+        clearHighlights();
+
+        const catNodes = data.nodes.filter(node => nodeMatchesCategory(node, selectedCategory, data.links));
         if (!catNodes.length) return;
         const avgX = catNodes.reduce((s, n) => s + (n.x || 0), 0) / catNodes.length;
         const avgY = catNodes.reduce((s, n) => s + (n.y || 0), 0) / catNodes.length;
@@ -270,7 +294,7 @@ function TikTokAnalysis() {
         return () => clearTimeout(timer);
     }, [selectedCategory, data]);
 
-    // ── ✅ FIX: Highlight from URL — เช็ค fgRef ข้างใน setTimeout ──────────
+    // ── Highlight from URL ────────────────────────────────────────────────
     useEffect(() => {
         const name = new URLSearchParams(location.search).get('highlight');
         if (!name || !data.nodes.length || !fgRef.current) return;
@@ -327,14 +351,15 @@ function TikTokAnalysis() {
         }
     }, [localFilter, data.nodes, data.links]);
 
-    // ── Hover Node ────────────────────────────────────────────────────────
+    // ── Hover Node — ทำงานร่วมกับ selectedCategory ───────────────────────
     const handleNodeHover = useCallback((node, prevNode, event) => {
         if (selectedNode || localFilter) return;
+        if (selectedCategory && node && !nodeMatchesCategory(node, selectedCategory, data.links)) return;
         setHoverNode(node || null);
         updateHighlights(node);
         setHoverLink(null);
         setLinkTooltipPos(null);
-    }, [selectedNode, localFilter, updateHighlights]);
+    }, [selectedNode, localFilter, selectedCategory, data.links, updateHighlights]);
 
     // ── Hover Link ────────────────────────────────────────────────────────
     const handleLinkHover = useCallback((link, prevLink, event) => {
@@ -363,26 +388,53 @@ function TikTokAnalysis() {
         return () => canvas.removeEventListener('mousemove', onMove);
     }, [hoverLink]);
 
-    // ── ✅ FIX: Node Click — เช็ค fgRef ก่อนเรียก ────────────────────────
+    // ── Node Click — ทำงานร่วมกับ category filter ────────────────────────
     const handleNodeClick = (node) => {
+        if (selectedCategory && !nodeMatchesCategory(node, selectedCategory, data.links)) return;
+
         const n = node === selectedNode ? null : node;
         setSelectedNode(n); setHoverNode(n); updateHighlights(n); setLocalFilter('');
         setHoverLink(null); setLinkTooltipPos(null);
         if (fgRef.current) {
             if (n) { fgRef.current.centerAt(node.x, node.y, 1000); fgRef.current.zoom(1.75, 1000); }
-            else fgRef.current.zoomToFit(1000, 50);
+            else {
+                if (selectedCategory) {
+                    const catNodes = data.nodes.filter(nd => nodeMatchesCategory(nd, selectedCategory, data.links));
+                    if (catNodes.length) {
+                        const avgX = catNodes.reduce((s, nd) => s + (nd.x || 0), 0) / catNodes.length;
+                        const avgY = catNodes.reduce((s, nd) => s + (nd.y || 0), 0) / catNodes.length;
+                        fgRef.current.centerAt(avgX, avgY, 1000);
+                    }
+                } else {
+                    fgRef.current.zoomToFit(1000, 50);
+                }
+            }
         }
     };
 
-    // ── ✅ FIX: Background Click — เช็ค fgRef ก่อนเรียก ──────────────────
+    // ── Background Click ──────────────────────────────────────────────────
     const handleBackgroundClick = () => {
         setSelectedNode(null); setLocalFilter('');
         clearHighlights();
         setHoverLink(null); setLinkTooltipPos(null);
-        if (fgRef.current) fgRef.current.zoomToFit(1000);
+        if (fgRef.current) {
+            if (selectedCategory) {
+                const catNodes = data.nodes.filter(nd => nodeMatchesCategory(nd, selectedCategory, data.links));
+                if (catNodes.length) {
+                    const avgX = catNodes.reduce((s, nd) => s + (nd.x || 0), 0) / catNodes.length;
+                    const avgY = catNodes.reduce((s, nd) => s + (nd.y || 0), 0) / catNodes.length;
+                    let maxD = 0;
+                    catNodes.forEach(nd => { const d = Math.sqrt((nd.x - avgX) ** 2 + (nd.y - avgY) ** 2); if (d > maxD) maxD = d; });
+                    fgRef.current.centerAt(avgX, avgY, 1000);
+                    fgRef.current.zoom(Math.min(3, Math.max(1.2, 400 / (maxD + 100))), 400);
+                }
+            } else {
+                fgRef.current.zoomToFit(1000);
+            }
+        }
     };
 
-    // ── Paint Node ────────────────────────────────────────────────────────
+    // ── Paint Node — category + tier + hover/select ──────────────────────
     const paintNode = useCallback((node, ctx, globalScale) => {
         const isHover = hoverNode === node;
         const isSelected = selectedNode === node;
@@ -392,16 +444,36 @@ function TikTokAnalysis() {
         const color = getNodeColor(node);
 
         let alpha = 1;
-        if (selectedCategory) {
-            const match = node.category === selectedCategory ||
-                (isInf && data.links.some(l =>
-                    (l.source?.id === node.id || l.target?.id === node.id) &&
-                    (l.source?.category === selectedCategory || l.target?.category === selectedCategory)
-                ));
-            alpha = match ? 1 : 0.1;
-        } else if (hoverNode || selectedNode || localFilter) {
-            alpha = (isHover || isSelected || isNeighbor) ? 1 : 0.1;
+        const inCategory = nodeMatchesCategory(node, selectedCategory, data.links);
+
+        // ── Tier filter ──
+        if (selectedTier) {
+            if (isInf) {
+                alpha = matchesTier(node, selectedTier) ? 1 : 0.08;
+            } else {
+                const hasMatchingInf = data.links.some(l => {
+                    if (l.isPhantom) return false;
+                    const src = typeof l.source === 'object' ? l.source : null;
+                    const tgt = typeof l.target === 'object' ? l.target : null;
+                    if (src?.id === node.id) return matchesTier(tgt, selectedTier);
+                    if (tgt?.id === node.id) return matchesTier(src, selectedTier);
+                    return false;
+                });
+                alpha = hasMatchingInf ? 1 : 0.08;
+            }
         }
+
+        // ── Category filter ──
+        if (selectedCategory) {
+            if (!inCategory) {
+                alpha = Math.min(alpha, 0.03);
+            } else if (hoverNode || selectedNode) {
+                if (!(isHover || isSelected || isNeighbor)) alpha = Math.min(alpha, 0.15);
+            }
+        } else if (hoverNode || selectedNode || localFilter) {
+            if (!(isHover || isSelected || isNeighbor)) alpha = Math.min(alpha, 0.1);
+        }
+
         ctx.globalAlpha = alpha;
 
         if (easterEggActive && isInf) {
@@ -449,8 +521,62 @@ function TikTokAnalysis() {
             ctx.fillStyle = '#2d3436'; ctx.fillText(node.name, node.x, ly);
         }
         ctx.globalAlpha = 1;
-    }, [hoverNode, selectedNode, highlightNodes, selectedCategory, data.links,
+    }, [hoverNode, selectedNode, highlightNodes, selectedCategory, selectedTier, data.links,
         localFilter, easterEggActive, loadAvatarForNode, imgCache]);
+
+    // ── Link Color — category + tier aware ────────────────────────────────
+    const getLinkColor = useCallback((link) => {
+        if (link.isPhantom) return 'rgba(0,0,0,0)';
+
+        // Tier filter
+        if (selectedTier) {
+            const src = typeof link.source === 'object' ? link.source : null;
+            const tgt = typeof link.target === 'object' ? link.target : null;
+            const infNode = src?.type === 'Influencer' ? src : tgt?.type === 'Influencer' ? tgt : null;
+            if (infNode && !matchesTier(infNode, selectedTier)) return 'rgba(200,200,200,0.05)';
+        }
+
+        const srcCat = link.source?.category;
+        const tgtCat = link.target?.category;
+        const linkInCategory = !selectedCategory || srcCat === selectedCategory || tgtCat === selectedCategory;
+
+        if (selectedCategory) {
+            if (!linkInCategory) return 'rgba(200,200,200,0.03)';
+            if (hoverNode || selectedNode) {
+                return highlightLinks.has(link) ? '#555' : 'rgba(150,150,150,0.15)';
+            }
+            return 'rgba(66,66,66,0.4)';
+        }
+
+        if (!hoverNode && !selectedNode && !localFilter) return 'rgba(66,66,66,0.3)';
+        return highlightLinks.has(link) ? '#333' : 'rgba(200,200,200,0.1)';
+    }, [selectedCategory, selectedTier, hoverNode, selectedNode, localFilter, highlightLinks]);
+
+    // ── Link Width — category aware ──────────────────────────────────────
+    const getLinkWidthFn = useCallback((link) => {
+        if (link.isPhantom) return 0;
+        const width = getLinkWidth(link, data.links);
+        const safeWidth = isNaN(width) ? 1.5 : Math.min(width, 8);
+
+        if (selectedCategory) {
+            const srcCat = link.source?.category;
+            const tgtCat = link.target?.category;
+            const linkInCategory = srcCat === selectedCategory || tgtCat === selectedCategory;
+            if (!linkInCategory) return 0;
+            if ((hoverNode || selectedNode) && highlightLinks.has(link)) return safeWidth;
+            return safeWidth * 0.7;
+        }
+
+        return safeWidth;
+    }, [selectedCategory, hoverNode, selectedNode, highlightLinks, data.links]);
+
+    // ── Count influencers per tier ────────────────────────────────────────
+    const tierCounts = {};
+    FOLLOWER_TIERS.forEach(tier => {
+        tierCounts[tier.key] = data.nodes.filter(n =>
+            n.type === 'Influencer' && matchesTier(n, tier.key)
+        ).length;
+    });
 
     // ── Render ────────────────────────────────────────────────────────────
     return (
@@ -476,14 +602,30 @@ function TikTokAnalysis() {
                     onClick={() => searchTikTok(globalSearch).then(() => setGlobalSearch(''))} disabled={isLoading}>
                     {isLoading ? 'Loading...' : 'ค้นหา'}
                 </button>
+                {/* ── ปุ่มกรองภาษาไทย ── */}
+                <button
+                    className="analyze-btn-small"
+                    style={{
+                        background: thaiOnly ? '#FF4757' : '#e0e0e0',
+                        color: thaiOnly ? '#fff' : '#555',
+                        fontSize: '0.85rem',
+                        padding: '10px 18px',
+                        transition: 'all 0.3s ease',
+                        whiteSpace: 'nowrap',
+                    }}
+                    onClick={toggleThaiOnly}
+                >
+                    {thaiOnly ? '🇹🇭 เฉพาะไทย' : 'ทุกภาษา'}
+                </button>
             </div>
 
             <div className="analysis-content">
+                {/* ── Category Legend ── */}
                 <div className="legend-section">
                     <div className="legend-title">🎨 COLOR LEGEND — คลิกเพื่อกรอง</div>
                     <div className="legend-pills">
                         <div className={`legend-pill ${selectedCategory === '' ? 'selected' : ''}`}
-                            onClick={() => { setSelectedCategory(''); if (fgRef.current) fgRef.current.zoomToFit(1000, 50); }}>
+                            onClick={() => { setSelectedCategory(''); clearHighlights(); if (fgRef.current) fgRef.current.zoomToFit(1000, 50); }}>
                             <div className="legend-dot" style={{ background: '#f0f0f0', border: '1.5px solid #ccc' }} />
                             All
                         </div>
@@ -505,7 +647,7 @@ function TikTokAnalysis() {
                     <FilterToolbar
                         localFilter={localFilter}
                         setLocalFilter={setLocalFilter}
-                        onRefresh={() => { loadGraphData(); setLocalFilter(''); setSelectedCategory(''); }}
+                        onRefresh={() => { loadGraphData(); setLocalFilter(''); setSelectedCategory(''); setSelectedTier(''); }}
                         platform="tiktok"
                         onSelectCategory={(cat) => {
                             setSelectedCategory(cat);
@@ -545,17 +687,8 @@ function TikTokAnalysis() {
                                 width={dimensions.width}
                                 height={dimensions.height}
                                 backgroundColor="#e6e6e6"
-                                linkColor={link => {
-                                    if (link.isPhantom) return 'rgba(0,0,0,0)';
-                                    if (!hoverNode && !selectedNode && !localFilter && !selectedCategory) return 'rgba(66,66,66,0.3)';
-                                    if (selectedCategory) return (link.source?.category === selectedCategory || link.target?.category === selectedCategory) ? '#a5a5a5' : 'rgba(200,200,200,0.1)';
-                                    return highlightLinks.has(link) ? '#333' : 'rgba(200,200,200,0.1)';
-                                }}
-                                linkWidth={link => {
-                                    if (link.isPhantom) return 0;
-                                    const width = getLinkWidth(link, data.links);
-                                    return isNaN(width) ? 1.5 : Math.min(width, 8);
-                                }}
+                                linkColor={getLinkColor}
+                                linkWidth={getLinkWidthFn}
                                 linkHoverPrecision={8}
                                 nodeCanvasObject={paintNode}
                                 nodePointerAreaPaint={(node, color, ctx) => {

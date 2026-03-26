@@ -2,7 +2,7 @@
 // ดึงข้อมูล graph เฉพาะ YouTube (subscribers, views, keyword search)
 import { useState, useCallback } from 'react';
 
-const API = 'http://localhost:5000';
+const API = process.env.REACT_APP_API_URL || '';
 
 export function useGraphData() {
     const [data, setData] = useState({ nodes: [], links: [] });
