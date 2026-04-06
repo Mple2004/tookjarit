@@ -665,6 +665,7 @@ function YoutubeAnalysis() {
                             favLoading={favLoading}
                             onClose={handleBackgroundClick}
                             onToggleFavorite={handleToggleFavorite}
+                            graphLinks={data.links}
                         />
 
                         <div

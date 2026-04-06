@@ -1080,6 +1080,53 @@ app.post('/api/import-tiktok-json', async (req, res) => {
 });
 
 // ─────────────────────────────────────────
+// POST /api/youtube/analyze-sentiment  →  YouTube service
+// ─────────────────────────────────────────
+app.post('/api/youtube/analyze-sentiment', authMiddleware, async (req, res) => {
+  try {
+    const response = await axios.post(
+      `${YOUTUBE_SERVICE}/api/youtube/analyze-sentiment`,
+      req.body,
+      { timeout: 600000 } // 10 นาที (คอมเม้นเยอะอาจนาน)
+    );
+    res.json(response.data);
+  } catch (err) {
+    const status = err.response?.status || 500;
+    res.status(status).json({ error: err.response?.data?.error || err.message });
+  }
+});
+
+// ─────────────────────────────────────────
+// GET /api/youtube/sentiment-summary  →  YouTube service
+// ─────────────────────────────────────────
+app.get('/api/youtube/sentiment-summary', async (req, res) => {
+  try {
+    const response = await axios.get(
+      `${YOUTUBE_SERVICE}/api/youtube/sentiment-summary`,
+      { params: req.query, timeout: 30000 }
+    );
+    res.json(response.data);
+  } catch (err) {
+    res.status(500).json({ error: err.response?.data?.error || err.message });
+  }
+});
+
+// ── วางใน server.js (port 5000) — proxy ไป YouTube service ──────────────────
+// GET /api/youtube/comment-samples  →  YouTube service
+app.get('/api/youtube/comment-samples', async (req, res) => {
+  try {
+    const response = await axios.get(
+      `${YOUTUBE_SERVICE}/api/youtube/comment-samples`,
+      { params: req.query, timeout: 15000 }
+    );
+    res.json(response.data);
+  } catch (err) {
+    res.status(500).json({ error: err.response?.data?.error || err.message });
+  }
+});
+
+
+// ─────────────────────────────────────────
 // API: Refresh Influencer Stats (อัพเดตยอด followers/likes/views จาก TikTok)
 // ─────────────────────────────────────────
 app.post('/api/refresh-stats', async (req, res) => {

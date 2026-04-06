@@ -47,15 +47,23 @@ def analyze_text_only(title, description):
     วิเคราะห์เฉพาะจากข้อความเท่านั้น
 
     กฎ:
-    - ถ้ามี brand → ใส่ brand
-    - ถ้ามีสินค้าแต่ไม่มี brand → brand = "No Brand"
+    - ถ้ามี brand → ใส่ brand และ categoryจากรายการ แล้วให้ productType = ชื่อสินค้าหรือชนิดสินค้าที่ใกล้เคียงที่สุด
+    - ถ้ามีสินค้าแต่ไม่มี brand → brand = "No Brand" แล้วให้ productType = ชื่อสินค้า
     - ถ้าไม่มีอะไรเลย → ทุกค่า null
 
-    category เลือก 1:
-    Fashion, Beauty & Personal Care, Health & Wellness,
-    Food & Beverage, Mom & Kids, IT & Gadgets,
-    Home & Living, Toys & Collectibles, Pet,
-    Automotive, Lifestyle
+    category ต้องเลือกเพียง 1 ประเภทจากรายการนี้เท่านั้น:
+    - Fashion (Clothing, Vintage, Oversize, Streetwear, Watches, Jewelry)
+    - Beauty & Personal Care (Skincare, Makeup, Perfume, Shampoo, Soap, Toothpaste)
+    - Health & Wellness (Supplements, Vitamins, Fitness Equipment, Medicine)
+    - Food & Beverage (Snacks, Coffee, Tea, Dried Food, Fresh Fruit, Clean Food)
+    - Mom & Kids (Baby Products, Baby Toys, Maternity items)
+    - IT & Gadgets (Phone Accessories, Bluetooth Headphones, Chargers, Smart Home)
+    - Home & Living (Furniture, Minimalist Decor, Kitchenware, Air Fryer, Eco-friendly items)
+    - Toys & Collectibles (Art Toy, Blind Box, Figures, Board Games)
+    - Pet (Pet Food, Pet Toys, Pet Care)
+    - Automotive (Car Accessories, Care products)
+    - Lifestyle (DIY, Handmade, Travel, Vlog, Daily Life, Random stuff)
+
 
     ตอบ JSON เท่านั้น:
     {{"brand": null, "productType": null, "category": null}}
@@ -88,9 +96,21 @@ def analyze_video(url):
                 },
                 """
                 วิเคราะห์วิดีโอ หา brand / productType / category
+                category ต้องเลือกเพียง 1 ประเภทจากรายการนี้เท่านั้น:
+                - Fashion (Clothing, Vintage, Oversize, Streetwear, Watches, Jewelry)
+                - Beauty & Personal Care (Skincare, Makeup, Perfume, Shampoo, Soap, Toothpaste)
+                - Health & Wellness (Supplements, Vitamins, Fitness Equipment, Medicine)
+                - Food & Beverage (Snacks, Coffee, Tea, Dried Food, Fresh Fruit, Clean Food)
+                - Mom & Kids (Baby Products, Baby Toys, Maternity items)
+                - IT & Gadgets (Phone Accessories, Bluetooth Headphones, Chargers, Smart Home)
+                - Home & Living (Furniture, Minimalist Decor, Kitchenware, Air Fryer, Eco-friendly items)
+                - Toys & Collectibles (Art Toy, Blind Box, Figures, Board Games)
+                - Pet (Pet Food, Pet Toys, Pet Care)
+                - Automotive (Car Accessories, Care products)
+                - Lifestyle (DIY, Handmade, Travel, Vlog, Daily Life, Random stuff)
 
-                ถ้าไม่มี brand:
-                - ให้ brand = "No Brand" ถ้ามีสินค้า
+                ถ้าไม่มี brandแต่มีสินค้า:
+                - ให้ brand = "No Brand"
                 - ถ้าไม่มีอะไรเลย → null
 
                 ตอบ JSON:

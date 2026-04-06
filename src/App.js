@@ -14,6 +14,10 @@ import Analysis from './Componant/Analysis';
 import Favorites from './Componant/Favorites';
 import Login from './Componant/Login';
 
+// ── Video Analysis ──
+import BrandAnalysisPage from './Componant/Analysis/youtube/BrandAnalysisPage';
+import InfluencerAnalysisPage from './Componant/Analysis/youtube/InfluencerAnalysisPage';
+
 
 // ── Jobboard ──
 import Jobboard from './Componant/Jobboard';
@@ -45,6 +49,9 @@ function App() {
                 <Route path="/favorites"           element={<Favorites />} />
                 <Route path="/login"               element={<Login />} />
                 <Route path="/reset-password/:token" element={<ResetPassword />} />
+
+                <Route path="/analysis/youtube/brand/:brandName" element={<BrandAnalysisPage />} />
+                <Route path="/analysis/youtube/brand/:brandName/influencer/:influencerName" element={<InfluencerAnalysisPage />} />
 
                 {/* ── Jobboard — specific routes ต้องอยู่ก่อน :id ── */}
                 <Route path="/jobboard"              element={<Jobboard />} />

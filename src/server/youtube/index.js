@@ -1,3 +1,4 @@
+const axios = require("axios");
 require("dotenv").config();
 const express = require("express");
 const { MongoClient } = require("mongodb");
@@ -5,11 +6,11 @@ const fetchChannelVideos = require("./chanel");
 const analyzeVideo = require("./brand");
 const cleanDocument = require("./cleanDoc");
 const syncToNeo4j = require("./mongoToNeo4j");
+//const analyzeSingleText = require("./sentiment");
 const pLimit = require('p-limit');
 
 const app = express();
 app.use(express.json());
-
 const CONFIG = {
   uri: process.env.Test_MONGODB,
   db: "InfluencerProject",
@@ -17,6 +18,18 @@ const CONFIG = {
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function analyzeSingleText(text = "") {
+  try {
+    const response = await axios.post("http://127.0.0.1:8000/analyze", {
+      text: text
+    });
+    return response.data;
+  } catch (error) {
+    console.error("❌ FastAPI Connection Error:", error.message);
+    return { status: "error", sentiment: null, confidence: null };
+  }
+}
 
 // ─────────────────────────────────────────
 // POST /api/youtube/search-channel
@@ -342,12 +355,14 @@ app.get('/api/youtube/top-videos-by-brand', async (req, res) => {
                 $group: {
                     _id: '$brand',
                     brand:      { $first: '$brand' },
+                    videoId:    { $first: '$videoId' },
                     videoUrl:   { $first: '$url' }, // ✅ map url → videoUrl
                     channelId:  { $first: '$channelId' },
                     totalLikes: { $first: '$totalLikes' },
                     totalViews: { $first: '$totalViews' },
                     caption:    { $first: '$caption' },
                     category:   { $first: '$category' },
+                    title:      { $first: '$title' },
                 }
             },
             { $sort: { totalViews: -1 } },
@@ -360,4 +375,242 @@ app.get('/api/youtube/top-videos-by-brand', async (req, res) => {
     } finally {
         await client.close();
     }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/youtube/analyze-sentiment
+// Body: { videoId }        → วิเคราะห์ comments ของวิดีโอนั้น
+//   หรือ { influencerName } → วิเคราะห์ทุก comment ของ influencer นั้น
+//
+// Logic:
+//   1. ดึง documents จาก `comments` collection ที่ sentiment === null
+//   2. วิเคราะห์ทีละ comment ผ่าน sentiment.py (concurrent 3 คัน)
+//   3. $set sentiment + confidence กลับลง document เดิม
+// ─────────────────────────────────────────────────────────────────────────────
+app.post("/api/youtube/analyze-sentiment", async (req, res) => {
+  const { videoId, influencerName } = req.body;
+ 
+  if (!videoId && !influencerName)
+    return res.status(400).json({ error: "videoId or influencerName is required" });
+ 
+  const client = new MongoClient(CONFIG.uri);
+  try {
+    await client.connect();
+ 
+    // ใช้ comments collection (ไม่ใช่ youtuber)
+    const commentCol = client.db(CONFIG.db).collection("comments");
+ 
+    // ─── หา comments ที่ยังไม่ได้วิเคราะห์ ───
+    const filter = {
+      platform: "youtube",
+      sentiment: null,             // เฉพาะที่ยังไม่มีผล
+      text: { $exists: true, $ne: "" },
+    };
+    if (videoId)        filter.videoId        = videoId;
+    if (influencerName) filter.influencerName  = new RegExp(influencerName, "i");
+ 
+    const docs = await commentCol.find(filter).toArray();
+ 
+    if (docs.length === 0)
+      return res.json({ message: "No pending comments found", processed: 0 });
+ 
+    console.log(`💬 Analyzing ${docs.length} comments...`);
+ 
+    //const limit = pLimit(3);   // วิเคราะห์พร้อมกัน 3 comment
+    let success = 0, failed = 0;
+ 
+    // ในส่วน Promise.all ของเดิม
+    const limit = pLimit(10); // เพิ่ม Concurrency ได้มากขึ้นเพราะ Python ไม่ต้องโหลดโมเดลซ้ำแล้ว
+
+    await Promise.all(
+      docs.map(doc =>
+        limit(async () => {
+          try {
+            // เรียกใช้ฟังก์ชันใหม่ที่ยิง API ไปหา Python
+            const result = await analyzeSingleText(doc.text || "");
+
+            if (result.status === "success") {
+              await commentCol.updateOne(
+                { _id: doc._id },
+                {
+                  $set: {
+                    sentiment: result.sentiment, // จะได้ POSITIVE/NEUTRAL/NEGATIVE
+                    confidence: result.confidence,
+                  },
+                }
+              );
+              success++;
+            } else {
+              failed++;
+            }
+          } catch (err) {
+            failed++;
+          }
+        })
+      )
+    );
+ 
+    console.log(`✅ Done: ${success} success, ${failed} failed`);
+    res.json({
+      message: `✅ Analyzed ${success} comments (${failed} failed)`,
+      total: docs.length,
+      success,
+      failed,
+    });
+ 
+  } catch (err) {
+    console.error("🚨 analyze-sentiment error:", err.message);
+    res.status(500).json({ error: err.message });
+  } finally {
+    await client.close();
+  }
+});
+ 
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/youtube/sentiment-summary
+// Query: ?influencerName=xxx   → สรุป sentiment ของ influencer
+//     หรือ ?videoId=xxx         → สรุป sentiment ของวิดีโอนั้น
+//
+// คืน: positive / neutral / negative count + percent + avgConfidence
+// ─────────────────────────────────────────────────────────────────────────────
+app.get("/api/youtube/sentiment-summary", async (req, res) => {
+  const { influencerName, videoId, videoIds } = req.query;
+ 
+  if (!influencerName && !videoId && !videoIds)
+    return res.status(400).json({ error: "influencerName or videoId is required" });
+ 
+  const client = new MongoClient(CONFIG.uri);
+  try {
+    await client.connect();
+    const commentCol = client.db(CONFIG.db).collection("comments");
+ 
+    const match = { platform: "youtube", sentiment: { $ne: null } };
+    // 1. จัดการเรื่อง Video Filter
+    if (videoIds && videoIds.trim() !== "") {
+        // กรณีระบุหลายวิดีโอ (ตามแบรนด์)
+        const ids = videoIds.split(',').filter(id => id.trim() !== "");
+        match.videoId = { $in: ids };
+    } else if (videoId) {
+        // กรณีระบุวิดีโอเดียว
+        match.videoId = videoId;
+    } else if (influencerName) {
+        // กรณีดูภาพรวมทั้งอินฟลู (ไม่มีการกรองวิดีโอ)
+        match.influencerName = new RegExp(influencerName, "i");
+    }
+ 
+    // aggregate: group by sentiment, นับ count + avg confidence
+    const agg = await commentCol.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: "$sentiment",
+          count:         { $sum: 1 },
+          avgConfidence: { $avg: "$confidence" },
+        },
+      },
+    ]).toArray();
+ 
+    if (agg.length === 0)
+      return res.json({
+        message: "No analyzed comments found. Run POST /analyze-sentiment first.",
+        data: null,
+      });
+ 
+    const total = agg.reduce((s, g) => s + g.count, 0);
+    const byLabel = {};
+    for (const g of agg) {
+      byLabel[g._id] = {
+        count:         g.count,
+        percent:       +((g.count / total) * 100).toFixed(1),
+        avgConfidence: +g.avgConfidence.toFixed(4),
+      };
+    }
+ 
+    const dominant = agg.sort((a, b) => b.count - a.count)[0]._id;
+ 
+    res.json({
+      ...(influencerName ? { influencerName } : {}),
+      ...(videoId        ? { videoId }        : {}),
+      totalComments: total,
+      dominantSentiment: dominant,
+      positive: byLabel["POSITIVE"] || { count: 0, percent: 0, avgConfidence: 0 },
+      neutral:  byLabel["NEUTRAL"]  || { count: 0, percent: 0, avgConfidence: 0 },
+      negative: byLabel["NEGATIVE"] || { count: 0, percent: 0, avgConfidence: 0 },
+    });
+ 
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    await client.close();
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// วางใน youtubeServer.js (port 5001)
+//
+// GET /api/youtube/comment-samples
+// Query: ?influencerName=xxx&brand=xxx&limit=3
+//
+// Logic:
+//   1. หา videoId ทั้งหมดของอินฟลูคนนี้ที่ brand ตรงกัน จาก `youtuber` collection
+//   2. ดึง comments จาก `comments` collection ที่ videoId อยู่ในกลุ่มนั้น + มี sentiment
+//   3. แบ่งกลับเป็น positive / neutral / negative
+// ─────────────────────────────────────────────────────────────────────────────
+app.get("/api/youtube/comment-samples", async (req, res) => {
+  const { influencerName, brand, limit = 3 } = req.query;
+
+  if (!influencerName || !brand)
+    return res.status(400).json({ error: "influencerName and brand are required" });
+
+  const client = new MongoClient(CONFIG.uri);
+  try {
+    await client.connect();
+    const db         = client.db(CONFIG.db);
+    const youtuberCol = db.collection("youtuber");
+    const commentCol  = db.collection("comments");
+
+    // Step 1: หา videoId ที่ตรงกับ influencer + brand
+    const matchingVideos = await youtuberCol.find(
+      {
+        authorName: new RegExp(`^${influencerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+        brand:      new RegExp(`^${brand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
+        platform:   "youtube",
+      },
+      { projection: { videoId: 1, _id: 0 } }
+    ).toArray();
+
+    const videoIds = matchingVideos.map(v => v.videoId).filter(Boolean);
+
+    if (videoIds.length === 0) {
+      return res.json({ positive: [], neutral: [], negative: [], videoIds: [] });
+    }
+
+    const sampleLimit = parseInt(limit);
+
+    // Step 2: ดึง comment samples แยกตาม sentiment
+    const [positive, neutral, negative] = await Promise.all([
+      commentCol.find(
+        { videoId: { $in: videoIds }, sentiment: "POSITIVE", platform: "youtube" },
+        { projection: { text: 1, confidence: 1, videoId: 1, _id: 0 } }
+      ).limit(sampleLimit).toArray(),
+
+      commentCol.find(
+        { videoId: { $in: videoIds }, sentiment: "NEUTRAL", platform: "youtube" },
+        { projection: { text: 1, confidence: 1, videoId: 1, _id: 0 } }
+      ).limit(sampleLimit).toArray(),
+
+      commentCol.find(
+        { videoId: { $in: videoIds }, sentiment: "NEGATIVE", platform: "youtube" },
+        { projection: { text: 1, confidence: 1, videoId: 1, _id: 0 } }
+      ).limit(sampleLimit).toArray(),
+    ]);
+
+    res.json({ positive, neutral, negative, videoIds });
+
+  } catch (err) {
+    console.error("❌ comment-samples error:", err.message);
+    res.status(500).json({ error: err.message });
+  } finally {
+    await client.close();
+  }
 });
