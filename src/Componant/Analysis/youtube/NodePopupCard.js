@@ -20,13 +20,26 @@ function fmtNum(n) {
 
 // ─── Trend Badge ──────────────────────────────────────────────────────────────
 // sentiment: 'positive' | 'negative' | 'neutral' | null (ยังไม่มีข้อมูล)
-function TrendBadge({ sentiment }) {
+function TrendBadge({ sentiment, totalComments = 0 }) {
+    if (totalComments === 0) {
+        return (
+            <span style={{
+                fontSize: 12, fontWeight: 500, color: '#888',
+                background: '#f8f9fa', borderRadius: 6,
+                padding: '2px 8px', fontFamily: "'Prompt', sans-serif",
+                border: '1px solid #e0e0e0'
+            }}>
+                ไม่มีคอมเมนต์
+            </span>
+        );
+    }
+
     const cfg = {
-        positive: { color: '#00b894', label: 'Trend', bg: '#eafaf5' },
-        negative: { color: '#e17055', label: 'Trend', bg: '#fdf0ee' },
-        neutral:  { color: '#b2bec3', label: 'Trend', bg: '#f4f4f4' },
+        POSITIVE: { color: '#00b894', label: 'เชิงบวก', bg: '#eafaf5' },
+        NEGATIVE: { color: '#e17055', label: 'เชิงลบ', bg: '#fdf0ee' },
+        NEUTRAL:  { color: '#b2bec3', label: 'เป็นกลาง',    bg: '#f4f4f4' },
     };
-    const c = cfg[sentiment] || cfg.neutral;
+    const c = cfg[sentiment] || cfg.NEUTRAL;
     return (
         <span style={{
             fontSize: 12, fontWeight: 700,
@@ -44,19 +57,20 @@ function TrendBadge({ sentiment }) {
 // ─── Brand Popup (ใหม่) ───────────────────────────────────────────────────────
 function BrandPopup({ node, relatedYoutubers, loadingYoutubers, onClose, color, imgCache, loadAvatarForNode }) {
     const navigate = useNavigate();
-    // ใช้ state เพื่อ trigger re-render เมื่อรูปใน imgCache โหลดเสร็จ
     const [, forceUpdate] = useState(0);
 
+    const [youtuberSentiments, setYoutuberSentiments] = useState({}); // key = name
+    const [sentimentLoading, setSentimentLoading] = useState(false);
+
+    // โหลดรูป avatar
     useEffect(() => {
         if (!relatedYoutubers.length) return;
         relatedYoutubers.forEach(yt => {
             if (!imgCache?.current?.[yt.name]) {
-                // สร้าง fake node object ที่ loadAvatarForNode ต้องการ
                 loadAvatarForNode?.({ name: yt.name });
             }
         });
 
-        // poll ทุก 300ms จนกว่ารูปจะโหลดครบ แล้ว re-render
         const timer = setInterval(() => {
             const allLoaded = relatedYoutubers.every(yt => imgCache?.current?.[yt.name]?.complete);
             forceUpdate(n => n + 1);
@@ -66,9 +80,68 @@ function BrandPopup({ node, relatedYoutubers, loadingYoutubers, onClose, color, 
         return () => clearInterval(timer);
     }, [relatedYoutubers, imgCache, loadAvatarForNode]);
 
+    // โหลด Sentiment จริง (เหมือน BrandAnalysisPage)
+    useEffect(() => {
+        if (!relatedYoutubers.length || !node?.name) return;
+
+        const loadSentiments = async () => {
+            setSentimentLoading(true);
+            try {
+                const promises = relatedYoutubers.map(async (yt) => {
+                    const name = yt.name;
+                    let videoIds = [];
+
+                    // 1. ดึง videoIds ที่เกี่ยวข้องกับ influencer + brand นี้
+                    try {
+                        const videoRes = await fetch(
+                            `${API}/api/youtube/data?authorName=${encodeURIComponent(name)}&brand=${encodeURIComponent(node.name)}&limit=100`
+                        );
+                        if (videoRes.ok) {
+                            const data = await videoRes.json();
+                            videoIds = (data.data || []).map(v => v.videoId).filter(Boolean);
+                        }
+                    } catch (e) {}
+
+                    let sentData = { totalComments: 0 };
+
+                    // 2. ดึง Sentiment โดยกรองด้วย videoIds
+                    if (videoIds.length > 0) {
+                        try {
+                            const sentRes = await fetch(
+                                `${API}/api/youtube/sentiment-summary?influencerName=${encodeURIComponent(name)}&videoIds=${videoIds.join(',')}`
+                            );
+                            if (sentRes.ok) {
+                                const data = await sentRes.json();
+                                if (data && typeof data.totalComments === 'number') {
+                                    sentData = data;
+                                }
+                            }
+                        } catch (e) {}
+                    }
+
+                    return { name, sentiment: sentData };
+                });
+
+                const results = await Promise.all(promises);
+                const newSentiments = {};
+                results.forEach(r => {
+                    newSentiments[r.name] = r.sentiment;
+                });
+
+                setYoutuberSentiments(newSentiments);
+            } catch (err) {
+                console.error("โหลด sentiment ใน popup ล้มเหลว:", err);
+            } finally {
+                setSentimentLoading(false);
+            }
+        };
+
+        loadSentiments();
+    }, [relatedYoutubers, node?.name]);
+
     return (
         <div style={{ width: '100%' }}>
-            {/* Header */}
+            {/* Header (เหมือนเดิม) */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
                 <div style={{
                     width: 54, height: 54, borderRadius: '50%',
@@ -93,34 +166,25 @@ function BrandPopup({ node, relatedYoutubers, loadingYoutubers, onClose, color, 
                 </div>
             </div>
 
-            {/* Info Row */}
+            {/* Info Row (เหมือนเดิม) */}
             <div style={{
                 display: 'grid', gridTemplateColumns: '1fr 1fr auto',
                 gap: 10, marginBottom: 14, alignItems: 'center',
             }}>
-                {/* Category */}
-                <div style={{
-                    background: `${color}18`, borderRadius: 10, padding: '8px 12px',
-                    borderLeft: `3px solid ${color}`,
-                }}>
+                <div style={{ background: `${color}18`, borderRadius: 10, padding: '8px 12px', borderLeft: `3px solid ${color}` }}>
                     <div style={{ fontSize: 10, color: '#999', fontFamily: "'Prompt', sans-serif", marginBottom: 2 }}>Category</div>
                     <div style={{ fontSize: 13, fontWeight: 700, color: color, fontFamily: "'Prompt', sans-serif" }}>
                         {node.category || '-'}
                     </div>
                 </div>
 
-                {/* Channel count */}
-                <div style={{
-                    background: '#f4f6fb', borderRadius: 10, padding: '8px 12px',
-                    textAlign: 'center',
-                }}>
+                <div style={{ background: '#f4f6fb', borderRadius: 10, padding: '8px 12px', textAlign: 'center' }}>
                     <div style={{ fontSize: 10, color: '#999', fontFamily: "'Prompt', sans-serif", marginBottom: 2 }}>Channel</div>
                     <div style={{ fontSize: 18, fontWeight: 800, color: '#2d3436', fontFamily: "'Prompt', sans-serif" }}>
                         {loadingYoutubers ? '...' : relatedYoutubers.length}
                     </div>
                 </div>
 
-                {/* View All Button */}
                 <button
                     onClick={() => navigate(`/analysis/youtube/brand/${encodeURIComponent(node.name)}`)}
                     style={{
@@ -129,81 +193,81 @@ function BrandPopup({ node, relatedYoutubers, loadingYoutubers, onClose, color, 
                         fontSize: 12, fontWeight: 700, fontFamily: "'Prompt', sans-serif",
                         lineHeight: 1.3, whiteSpace: 'nowrap',
                         boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
-                        transition: 'transform 0.15s, box-shadow 0.15s',
                     }}
-                    onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 4px 14px rgba(0,0,0,0.22)'; }}
-                    onMouseLeave={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)'; }}
+                    onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.transform = ''; }}
                 >
                     View all<br />Analysis
                 </button>
             </div>
 
-            {/* Divider */}
             <div style={{ height: 1, background: '#ececec', margin: '10px 0 12px' }} />
 
             {/* Youtuber List */}
             {loadingYoutubers ? (
-                <div style={{ textAlign: 'center', fontSize: 12, color: '#aaa', padding: '16px 0', fontFamily: "'Prompt', sans-serif" }}>
-                    กำลังโหลด...
-                </div>
+                <div style={{ textAlign: 'center', fontSize: 12, color: '#aaa', padding: '16px 0' }}>กำลังโหลด...</div>
             ) : relatedYoutubers.length === 0 ? (
-                <div style={{ textAlign: 'center', fontSize: 12, color: '#ccc', padding: '12px 0', fontFamily: "'Prompt', sans-serif" }}>
-                    ไม่พบ YouTuber ที่เกี่ยวข้อง
-                </div>
+                <div style={{ textAlign: 'center', fontSize: 12, color: '#ccc', padding: '12px 0' }}>ไม่พบ YouTuber ที่เกี่ยวข้อง</div>
             ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 240, overflowY: 'auto' }}>
                     {relatedYoutubers
-                    .sort((a, b) => (b.subscribers || 0) - (a.subscribers || 0))
-                    .map((yt, idx) => (
-                        <div key={idx} style={{
-                            display: 'flex', alignItems: 'center', gap: 10,
-                            background: '#fafafa', borderRadius: 10, padding: '8px 10px',
-                            border: '1px solid #efefef',
-                        }}>
-                            {/* Avatar — ใช้ imgCache เหมือน InfluencerPopup */}
-                            <div style={{
-                                width: 38, height: 38, borderRadius: '50%',
-                                background: '#dfe6e9', overflow: 'hidden',
-                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                flexShrink: 0, fontSize: 16, fontWeight: 700, color: '#636e72',
-                            }}>
-                                {imgCache?.current?.[yt.name]?.src
-                                    ? <img src={imgCache.current[yt.name].src} alt={yt.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                                    : yt.name.charAt(0).toUpperCase()
-                                }
-                            </div>
+                        .sort((a, b) => (b.subscribers || 0) - (a.subscribers || 0))
+                        .map((yt, idx) => {
+                            const sent = youtuberSentiments[yt.name] || {};
+                            const totalComments = sent.totalComments || 0;
+                            const dominant = sent.dominantSentiment || null;
 
-                            {/* Name */}
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{
-                                    fontSize: 13, fontWeight: 700, color: '#2d3436',
-                                    fontFamily: "'Prompt', sans-serif",
-                                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                            return (
+                                <div key={idx} style={{
+                                    display: 'flex', alignItems: 'center', gap: 10,
+                                    background: '#fafafa', borderRadius: 10, padding: '8px 10px',
+                                    border: '1px solid #efefef',
                                 }}>
-                                    {yt.name}
+                                    <div style={{
+                                        width: 38, height: 38, borderRadius: '50%',
+                                        background: '#dfe6e9', overflow: 'hidden',
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                        flexShrink: 0, fontSize: 16, fontWeight: 700, color: '#636e72',
+                                    }}>
+                                        {imgCache?.current?.[yt.name]?.src
+                                            ? <img src={imgCache.current[yt.name].src} alt={yt.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                            : yt.name.charAt(0).toUpperCase()
+                                        }
+                                    </div>
+
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                        <div style={{
+                                            fontSize: 13, fontWeight: 700, color: '#2d3436',
+                                            fontFamily: "'Prompt', sans-serif",
+                                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                        }}>
+                                            {yt.name}
+                                        </div>
+                                    </div>
+
+                                    {/* Sentiment จริง */}
+                                    {sentimentLoading ? (
+                                        <span style={{ fontSize: 11, color: '#aaa' }}>...</span>
+                                    ) : (
+                                        <TrendBadge sentiment={dominant} totalComments={totalComments} />
+                                    )}
+
+                                    <button
+                                        onClick={() => navigate(`/analysis/youtube/brand/${encodeURIComponent(node.name)}/influencer/${encodeURIComponent(yt.name)}`)}
+                                        style={{
+                                            padding: '5px 12px', borderRadius: 8, border: '1.5px solid #e0e0e0',
+                                            background: '#fff', color: '#2d3436', cursor: 'pointer',
+                                            fontSize: 11, fontWeight: 600, fontFamily: "'Prompt', sans-serif",
+                                            whiteSpace: 'nowrap', flexShrink: 0,
+                                        }}
+                                        onMouseEnter={e => { e.currentTarget.style.borderColor = PLATFORM_COLOR; e.currentTarget.style.color = PLATFORM_COLOR; }}
+                                        onMouseLeave={e => { e.currentTarget.style.borderColor = '#e0e0e0'; e.currentTarget.style.color = '#2d3436'; }}
+                                    >
+                                        view
+                                    </button>
                                 </div>
-                            </div>
-
-                            {/* Trend badge */}
-                            <TrendBadge sentiment={yt.sentiment || 'neutral'} />
-
-                            {/* View button */}
-                            <button
-                                onClick={() => navigate(`/analysis/youtube/brand/${encodeURIComponent(node.name)}/influencer/${encodeURIComponent(yt.name)}`)}
-                                style={{
-                                    padding: '5px 12px', borderRadius: 8, border: '1.5px solid #e0e0e0',
-                                    background: '#fff', color: '#2d3436', cursor: 'pointer',
-                                    fontSize: 11, fontWeight: 600, fontFamily: "'Prompt', sans-serif",
-                                    whiteSpace: 'nowrap', flexShrink: 0,
-                                    transition: 'border-color 0.15s, background 0.15s',
-                                }}
-                                onMouseEnter={e => { e.currentTarget.style.borderColor = PLATFORM_COLOR; e.currentTarget.style.color = PLATFORM_COLOR; }}
-                                onMouseLeave={e => { e.currentTarget.style.borderColor = '#e0e0e0'; e.currentTarget.style.color = '#2d3436'; }}
-                            >
-                                view
-                            </button>
-                        </div>
-                    ))}
+                            );
+                        })}
                 </div>
             )}
         </div>

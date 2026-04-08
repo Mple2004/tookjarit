@@ -45,7 +45,8 @@ function Favorites() {
                 const avatarMap = {};
                 await Promise.all(favs.map(async fav => {
                     try {
-                        const r = await fetch(`${API}/api/avatar/${encodeURIComponent(fav.influencerName)}`);
+                        const platform = fav.platform || 'tiktok';
+                        const r = await fetch(`${API}/api/avatar/${encodeURIComponent(fav.influencerName)}?platform=${platform}`);
                         const d = await r.json();
                         if (d.avatar) avatarMap[fav.influencerName] = d.avatar;
                     } catch {}

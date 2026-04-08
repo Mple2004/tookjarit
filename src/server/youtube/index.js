@@ -155,8 +155,52 @@ app.post("/api/youtube/search-channel", async (req, res) => {
 
               if (isNoBrand) {
                 console.log(`⏭️ No brand found: ${v.title}`);
+
+                // ยังคง sync comments แม้ไม่มี brand
+                const commentCol = client.db(CONFIG.db).collection("comments");
+                const commentsToInsert = (v.comments || [])
+                    .filter(c => c.text && c.text.trim() !== "")
+                    .map(c => ({
+                        videoId: v.videoId,
+                        influencerName: v.authorName,
+                        channelId: v.channelId,
+                        platform: "youtube",
+                        text: c.text,
+                        likeCount: c.likeCount || null,
+                        sentiment: null,
+                        confidence: null,
+                    }));
+
+                if (commentsToInsert.length > 0) {
+                    const bulkOps = commentsToInsert.map(c => ({
+                        updateOne: {
+                            filter: { videoId: c.videoId, text: c.text, platform: "youtube" },
+                            update: { $setOnInsert: c },
+                            upsert: true,
+                        },
+                    }));
+                    await commentCol.bulkWrite(bulkOps, { ordered: false });
+
+                    await Promise.all(
+                        commentsToInsert.map(async (c) => {
+                            try {
+                                const result = await analyzeSingleText(c.text);
+                                if (result.status === "success") {
+                                    await commentCol.updateOne(
+                                        { videoId: c.videoId, text: c.text, platform: "youtube" },
+                                        { $set: { sentiment: result.sentiment, confidence: result.confidence } }
+                                    );
+                                }
+                            } catch (err) {
+                                console.error(`❌ sentiment error: ${err.message}`);
+                            }
+                        })
+                    );
+                    console.log(`✅ Synced + Sentiment done (No Brand) for ${v.videoId}`);
+                }
+
                 return { videoId: v.videoId, title: v.title, brand: "No Brand", skipped: true };
-              }
+            }
 
               finalAnalysis = {
                 brand: analysis.brand || "No Brand",
@@ -200,6 +244,53 @@ app.post("/api/youtube/search-channel", async (req, res) => {
             );
 
             await cleanDocument(col, v.videoId);
+
+            // ─── Auto sync + Auto sentiment ───
+            const commentCol = client.db(CONFIG.db).collection("comments");
+
+            const commentsToInsert = (v.comments || [])
+              .filter(c => c.text && c.text.trim() !== "")
+              .map(c => ({
+                videoId: v.videoId,
+                influencerName: v.authorName,
+                channelId: v.channelId,
+                platform: "youtube",
+                text: c.text,
+                likeCount: c.likeCount || null,
+                sentiment: null,
+                confidence: null,
+              }));
+
+            if (commentsToInsert.length > 0) {
+              // 1. Insert comments ที่ยังไม่มีก่อน
+              const bulkOps = commentsToInsert.map(c => ({
+                updateOne: {
+                  filter: { videoId: c.videoId, text: c.text, platform: "youtube" },
+                  update: { $setOnInsert: c },
+                  upsert: true,
+                },
+              }));
+              await commentCol.bulkWrite(bulkOps, { ordered: false });
+              console.log(`💬 Synced ${commentsToInsert.length} comments → ${v.videoId}`);
+
+              // 2. วิเคราะห์ sentiment ทันทีเลย (แค่ 3 comments เบามาก)
+              await Promise.all(
+                commentsToInsert.map(async (c) => {
+                  try {
+                    const result = await analyzeSingleText(c.text);
+                    if (result.status === "success") {
+                      await commentCol.updateOne(
+                        { videoId: c.videoId, text: c.text, platform: "youtube" },
+                        { $set: { sentiment: result.sentiment, confidence: result.confidence } }
+                      );
+                    }
+                  } catch (err) {
+                    console.error(`❌ sentiment error: ${err.message}`);
+                  }
+                })
+              );
+              console.log(`✅ Sentiment done for ${v.videoId}`);
+            }
 
             return {
               videoId: v.videoId,
@@ -609,6 +700,60 @@ app.get("/api/youtube/comment-samples", async (req, res) => {
 
   } catch (err) {
     console.error("❌ comment-samples error:", err.message);
+    res.status(500).json({ error: err.message });
+  } finally {
+    await client.close();
+  }
+});
+
+app.post("/api/youtube/migrate-comments", async (req, res) => {
+  const client = new MongoClient(CONFIG.uri);
+  try {
+    await client.connect();
+    const db = client.db(CONFIG.db);
+    const youtuberCol = db.collection("youtuber");
+    const commentCol = db.collection("comments");
+
+    const videos = await youtuberCol.find({
+      platform: "youtube",
+      comments: { $exists: true, $ne: [] }
+    }).toArray();
+
+    console.log(`📦 Found ${videos.length} videos to migrate`);
+
+    let total = 0;
+
+    for (const v of videos) {
+      const commentsToInsert = (v.comments || [])
+        .filter(c => c.text && c.text.trim() !== "")
+        .map(c => ({
+          videoId: v.videoId,
+          influencerName: v.authorName,
+          channelId: v.channelId,
+          platform: "youtube",
+          text: c.text,
+          likeCount: c.likeCount || null,
+          sentiment: null,
+          confidence: null,
+        }));
+
+      if (commentsToInsert.length > 0) {
+        const bulkOps = commentsToInsert.map(c => ({
+          updateOne: {
+            filter: { videoId: c.videoId, text: c.text, platform: "youtube" },
+            update: { $setOnInsert: c },
+            upsert: true,
+          },
+        }));
+        await commentCol.bulkWrite(bulkOps, { ordered: false });
+        total += commentsToInsert.length;
+        console.log(`✅ ${v.authorName} - ${v.videoId}: ${commentsToInsert.length} comments`);
+      }
+    }
+
+    res.json({ message: `✅ Migrated ${total} comments`, total });
+  } catch (err) {
+    console.error("❌ migrate error:", err.message);
     res.status(500).json({ error: err.message });
   } finally {
     await client.close();

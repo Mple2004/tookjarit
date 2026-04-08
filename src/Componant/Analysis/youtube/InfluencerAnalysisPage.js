@@ -41,7 +41,7 @@ function SentimentDonut({ data }) {
                     <span style={{ fontSize: 12, color: '#ccc', fontFamily: "'Prompt', sans-serif" }}>รอข้อมูล</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'center', gap: 16, flexWrap: 'wrap' }}>
-                    {[{ color: '#00b894', label: 'เชิงบวก' }, { color: '#e17055', label: 'เชิงลบ' }, { color: '#b2bec3', label: 'กลาง' }].map(s => (
+                    {[{ color: '#00b894', label: 'เชิงบวก' }, { color: '#e17055', label: 'เชิงลบ' }, { color: '#b2bec3', label: 'เป็นกลาง' }].map(s => (
                         <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                             <div style={{ width: 10, height: 10, borderRadius: '50%', background: s.color }} />
                             <span style={{ fontSize: 12, color: '#888', fontFamily: "'Prompt', sans-serif" }}>{s.label}</span>
@@ -54,7 +54,7 @@ function SentimentDonut({ data }) {
     const segments = [
         { key: 'positive', color: '#00b894', label: 'เชิงบวก', percent: data.positive.percent },
         { key: 'negative', color: '#e17055', label: 'เชิงลบ',  percent: data.negative.percent },
-        { key: 'neutral',  color: '#b2bec3', label: 'กลาง',    percent: data.neutral.percent  },
+        { key: 'neutral',  color: '#b2bec3', label: 'เป็นกลาง',    percent: data.neutral.percent  },
     ];
     const R = 54, cx = 70, cy = 70, stroke = 22;
     const circumference = 2 * Math.PI * R;
@@ -344,7 +344,7 @@ function InfluencerAnalysisPage() {
                         {hasSentiment
                             ? <span style={{ ...styles.pendingTag, background: '#eafaf5', color: '#00b894' }}>
                                 {sentiment.dominantSentiment === 'POSITIVE' ? '😊 เชิงบวก' :
-                                 sentiment.dominantSentiment === 'NEGATIVE' ? '😞 เชิงลบ' : '😐 กลาง'}
+                                 sentiment.dominantSentiment === 'NEGATIVE' ? '😞 เชิงลบ' : '😐 เป็นกลาง'}
                               </span>
                             : <span style={styles.pendingTag}>ไม่มีคอมเมนต์</span>
                         }
@@ -429,7 +429,7 @@ function InfluencerAnalysisPage() {
                     <div style={{ padding: '12px 0' }}>
                         <CommentSampleRow label="😊 เชิงบวก" color="#00b894" bg="#eafaf5" comments={commentSamples.positive} />
                         <CommentSampleRow label="😞 เชิงลบ"  color="#e17055" bg="#fdf0ee" comments={commentSamples.negative} />
-                        <CommentSampleRow label="😐 กลาง"    color="#b2bec3" bg="#f4f4f4" comments={commentSamples.neutral}  />
+                        <CommentSampleRow label="😐 เป็นกลาง"    color="#b2bec3" bg="#f4f4f4" comments={commentSamples.neutral}  />
                         {!hasAnySample && (
                             <div style={styles.placeholderNote}>
                                 กด "วิเคราะห์ Sentiment" เพื่อดูตัวอย่างคอมเม้นที่ถูกจัดประเภทแล้ว

@@ -19,7 +19,7 @@ function TrendChip({ sentiment }) {
     const cfg = {
         POSITIVE: { color: '#00b894', bg: '#eafaf5', label: 'เชิงบวก' },
         NEGATIVE: { color: '#e17055', bg: '#fdf0ee', label: 'เชิงลบ' },
-        NEUTRAL:  { color: '#636e72', bg: '#f4f4f4', label: 'กลาง' },
+        NEUTRAL:  { color: '#636e72', bg: '#f4f4f4', label: 'เป็นกลาง' },
     };
     const c = cfg[sentiment] || cfg.NEUTRAL;
     return (
@@ -484,10 +484,13 @@ const styles = {
         fontSize: 12,
         color: '#aaa',
     },
+    // ✅ แบบแก้แล้ว
     sortBtn: {
         padding: '5px 14px',
         borderRadius: 20,
-        border: '1.5px solid #ddd',
+        borderWidth: '1.5px',          // แยกออกเป็น non-shorthand ทั้งหมด
+        borderStyle: 'solid',
+        borderColor: '#ddd',
         background: '#fff',
         color: '#555',
         fontSize: 12,
@@ -499,7 +502,7 @@ const styles = {
     sortBtnActive: {
         background: PLATFORM_COLOR,
         color: '#fff',
-        borderColor: PLATFORM_COLOR,
+        borderColor: PLATFORM_COLOR,   // ✅ ใช้ non-shorthand เหมือนกันแล้ว
     },
 };
 

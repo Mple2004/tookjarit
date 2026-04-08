@@ -614,49 +614,58 @@ app.get('/api/export-excel', async (req, res) => {
         const fetchYoutubeData = async () => {
         try {
             const params = { limit: 9999 };
-            if (keyword.trim()) params.keyword = keyword.trim(); // service รับ keyword
-            if (categories)     params.category = categories.split(',')[0]; // รับทีละ 1
+            // ส่ง category ไปให้ YouTube Service กรองเบื้องต้น (ถ้ามี)
+            if (categories) params.category = categories.split(',')[0]; 
 
             const ytRes = await axios.get(
                 `${YOUTUBE_SERVICE}/api/youtube/data`,
                 { params, timeout: 30000 }
             );
+
+            // ✅ 1. ประกาศตัวแปร rows ก่อนใช้งาน
             let rows = ytRes.data?.data || [];
 
-            // กรอง categories (หลาย cat) ฝั่งนี้
+            // ✅ 2. กรอง categories (กรณีมีหลายอัน)
             if (categories) {
                 const catList = categories.split(',').map(c => c.trim()).filter(Boolean);
-                rows = rows.filter(d => catList.includes(d.category));
+                if (catList.length > 0) {
+                    rows = rows.filter(d => catList.includes(d.category));
+                }
             }
-            // กรอง keyword ฝั่งนี้ (ครอบคลุมทุก field)
+
+            // ✅ 3. กรอง keyword หลังจากได้ rows มาแล้ว
             if (keyword.trim()) {
                 const kw = keyword.trim().toLowerCase();
                 rows = rows.filter(d =>
-                    (d.authorName   || '').toLowerCase().includes(kw) ||
-                    (d.brand        || '').toLowerCase().includes(kw) ||
-                    (d.productType  || '').toLowerCase().includes(kw)
+                    (d.authorName || '').toLowerCase().includes(kw) ||
+                    (d.brand      || '').toLowerCase().includes(kw) ||
+                    (d.productType || '').toLowerCase().includes(kw) ||
+                    (d.title      || '').toLowerCase().includes(kw) ||
+                    (d.caption    || '').toLowerCase().includes(kw)
                 );
             }
 
-            // ✅ Normalize YouTube fields ให้ตรงกับ TikTok columns
+            // ✅ 4. Normalize ข้อมูล
             return rows.map(d => ({
                 authorName:    d.authorName    || '',
-                followers:     d.subscribers   || 0,   // subscribers → followers
+                followers:     d.subscribers   || 0,
                 brand:         d.brand         || '',
                 productType:   d.productType   || '',
                 category:      d.category      || '',
-                caption:       d.caption       || d.title || '', // caption หรือ title
+                caption:       d.caption       || d.title || '',
                 totalViews:    d.totalViews    || 0,
                 totalLikes:    d.totalLikes    || 0,
                 totalComments: d.totalComments || 0,
-                totalShares:   '-',                    // YouTube ไม่มี shares
-                videoUrl:      d.url           || '',  // url → videoUrl
+                totalShares:   '-',
+                videoUrl:      d.url           || '',
                 platform:      'youtube',
             }));
         } catch (ytErr) {
+            // ถ้า service 5001 ตาย หรือหาไม่เจอ จะลงมาที่นี่
             console.error('❌ YouTube export fetch error:', ytErr.message);
             return [];
-        }};
+        }
+    };
 
         let tiktokData = [], youtubeData = [];
         if (platform === 'tiktok'   || platform === 'both') tiktokData  = await Influencer.find(buildQuery('tiktok')).lean();
