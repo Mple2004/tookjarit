@@ -6,7 +6,6 @@ const fetchChannelVideos = require("./chanel");
 const analyzeVideo = require("./brand");
 const cleanDocument = require("./cleanDoc");
 const syncToNeo4j = require("./mongoToNeo4j");
-//const analyzeSingleText = require("./sentiment");
 const pLimit = require('p-limit');
 
 const app = express();
@@ -16,7 +15,6 @@ const CONFIG = {
   db: "InfluencerProject",
   collection: "youtuber",
 };
-
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function analyzeSingleText(text = "") {
@@ -31,24 +29,22 @@ async function analyzeSingleText(text = "") {
   }
 }
 
-// ─────────────────────────────────────────
-// POST /api/youtube/search-channel
-// Body: { channelId, max? }
-// ─────────────────────────────────────────
+// ++++++++++++ [SECTION 1: DATA INGESTION] ++++++++++++++
+// ─────────────────────────────────────────────────────────────────────────────
 app.post("/api/youtube/search-channel", async (req, res) => {
   let { channelId, search, max = 5, minSubscribers = 1000 } = req.body;
-
   if (!channelId && !search)
     return res.status(400).json({ error: "channelId or search is required" });
 
   const client = new MongoClient(CONFIG.uri);
+  //ค้นหาvdo
   try {
-    // ───── ค้นหา channelId จาก keyword / @handle ─────
     if (!channelId && search) {
       const trimmed = search.trim();
 
       if (trimmed.startsWith('UC') && trimmed.length > 20) {
         channelId = trimmed;
+
       } else if (trimmed.startsWith('@')) {
         const query = trimmed.slice(1);
         const { google } = require('googleapis');
@@ -59,6 +55,7 @@ app.post("/api/youtube/search-channel", async (req, res) => {
         channelId = searchRes.data.items?.[0]?.id?.channelId;
         if (!channelId) return res.status(404).json({ error: `ไม่พบช่อง: ${trimmed}` });
         console.log(`🔍 "${trimmed}" → channelId: ${channelId}`);
+
       } else {
         search = trimmed.replace(/^#/, '');
         channelId = null;
@@ -321,16 +318,145 @@ app.post("/api/youtube/search-channel", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("🚨 search-channel error:", err.message);
+    console.error("search-channel error:", err.message);
     res.status(500).json({ error: err.message });
   } finally {
     await client.close();
   }
 });
 
-// ─────────────────────────────────────────
-// POST /api/youtube/sync-neo4j
-// ─────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// ดึงcommentsจาก youtuber collection มาใส่ใน comments collection (ใช้ในกรณีที่เพิ่งเพิ่มฟีเจอร์ comment sentiment แล้วอยากวิเคราะห์คอมเมนต์เก่าๆที่มีอยู่แล้ว)
+app.post("/api/youtube/migrate-comments", async (req, res) => {
+  const client = new MongoClient(CONFIG.uri);
+  try {
+    await client.connect();
+    const db = client.db(CONFIG.db);
+    const youtuberCol = db.collection("youtuber");
+    const commentCol = db.collection("comments");
+
+    //หา videos ที่มี comment จาก youtuber collection
+    const videos = await youtuberCol.find({
+      platform: "youtube",
+      comments: { $exists: true, $ne: [] }
+    }).toArray();
+    console.log(`📦 Found ${videos.length} videos to migrate`);
+
+
+    let total = 0;
+    for (const v of videos) {
+      //ปรับข้อมูลให้เป็นรูปแบบเดียวกับ comment collection
+      const commentsToInsert = (v.comments || [])
+        .filter(c => c.text && c.text.trim() !== "")
+        .map(c => ({
+          videoId: v.videoId,
+          influencerName: v.authorName,
+          channelId: v.channelId,
+          platform: "youtube",
+          text: c.text,
+          likeCount: c.likeCount || null,
+          sentiment: null,
+          confidence: null,
+        }));
+
+      //บันทึกลง collection จริง (upsert แบบไม่ซ้ำ)
+      if (commentsToInsert.length > 0) {
+        const bulkOps = commentsToInsert.map(c => ({
+          updateOne: {
+            filter: { videoId: c.videoId, text: c.text, platform: "youtube" },
+            update: { $setOnInsert: c },
+            upsert: true,
+          },
+        }));
+        await commentCol.bulkWrite(bulkOps, { ordered: false });
+        total += commentsToInsert.length;
+        console.log(`✅ ${v.authorName} - ${v.videoId}: ${commentsToInsert.length} comments`);
+      }
+    }
+
+    res.json({ message: `✅ Migrated ${total} comments`, total });
+  } catch (err) {
+    console.error("migrate-comments error:", err.message);
+    res.status(500).json({ error: err.message });
+  } finally {
+    await client.close();
+  }
+});
+
+// ++++++++++++ [SECTION 2: DATA PROCESSING] ++++++++++++++
+// ─────────────────────────────────────────────────────────────────────────────
+//วิเคราะห์คอมเม้นต์
+app.post("/api/youtube/analyze-sentiment", async (req, res) => {
+  const { videoId, influencerName } = req.body;
+  if (!videoId && !influencerName)
+    return res.status(400).json({ error: "videoId or influencerName is required" });
+
+  const client = new MongoClient(CONFIG.uri);
+  try {
+    await client.connect();
+    const commentCol = client.db(CONFIG.db).collection("comments");
+ 
+    const filter = {
+      platform: "youtube",
+      sentiment: null,             // เฉพาะที่ยังไม่มีผล
+      text: { $exists: true, $ne: "" },
+    };
+    if (videoId)        filter.videoId        = videoId;
+    if (influencerName) filter.influencerName  = new RegExp(influencerName, "i");
+ 
+    const docs = await commentCol.find(filter).toArray();
+    if (docs.length === 0)
+      return res.json({ message: "No pending comments found", processed: 0 });
+    console.log(`💬 Analyzing ${docs.length} comments...`);
+ 
+    let success = 0, failed = 0;
+    const limit = pLimit(10);
+    await Promise.all(
+      docs.map(doc =>
+        limit(async () => {
+          try {
+            // เรียกใช้ฟังก์ชันใหม่ที่ยิง API ไปหา Python
+            const result = await analyzeSingleText(doc.text || "");
+
+            if (result.status === "success") {
+              await commentCol.updateOne(
+                { _id: doc._id },
+                {
+                  $set: {
+                    sentiment: result.sentiment,
+                    confidence: result.confidence,
+                  },
+                }
+              );
+              success++;
+            } else {
+              failed++;
+            }
+          } catch (err) {
+            failed++;
+          }
+        })
+      )
+    );
+ 
+    console.log(`✅ Done: ${success} success, ${failed} failed`);
+    res.json({
+      message: `✅ Analyzed ${success} comments (${failed} failed)`,
+      total: docs.length,
+      success,
+      failed,
+    });
+ 
+  } catch (err) {
+    console.error("analyze-sentiment error:", err.message);
+    res.status(500).json({ error: err.message });
+  } finally {
+    await client.close();
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+//เชื่อมต่อกับ Neo4j เพื่ออัพเดตข้อมูลแบบ real-time หลังจากที่มีการเพิ่ม/อัพเดตวิดีโอใน MongoDB (ใช้ในกรณีที่เพิ่งเพิ่มฟีเจอร์ Neo4j แล้วอยากซิงค์ข้อมูลเก่าๆที่มีอยู่แล้ว)
 app.post("/api/youtube/sync-neo4j", async (req, res) => {
   try {
     await syncToNeo4j();
@@ -340,10 +466,9 @@ app.post("/api/youtube/sync-neo4j", async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────
-// GET /api/youtube/data
-// Query: ?authorName=xxx / ?brand=xxx / ?category=xxx
-// ─────────────────────────────────────────
+// ++++++++++++ [SECTION 3: DATA RETRIEVAL] ++++++++++++++
+// ─────────────────────────────────────────────────────────────────────────────
+//ดึงรายการวิดีโอโดยกรองได้ด้วย authorName, brand, category และจำกัดจำนวนผลลัพธ์ด้วย limit
 app.get("/api/youtube/data", async (req, res) => {
   const { authorName, brand, category, limit = 50 } = req.query;
   const client = new MongoClient(CONFIG.uri);
@@ -369,66 +494,13 @@ app.get("/api/youtube/data", async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────
-// GET /api/youtube/health
-// ─────────────────────────────────────────
-app.get("/api/youtube/health", (req, res) => {
-  res.json({ status: "ok", service: "youtube-backend", port: PORT });
-});
-// ─────────────────────────────────────────
-// GET /api/last-updated  (ค้นหาล่าสุด)
-// ดึงจาก lastUpdate field ของ document ล่าสุดใน youtuber collection
-// ─────────────────────────────────────────
-app.get('/api/last-updated', async (req, res) => {
-  const client = new MongoClient(CONFIG.uri);
-  try {
-    await client.connect();
-    const col = client.db(CONFIG.db).collection(CONFIG.collection);
-    const latest = await col
-      .find({ platform: 'youtube', lastUpdate: { $exists: true } })
-      .sort({ lastUpdate: -1 })
-      .limit(1)
-      .toArray();
-    res.json({ lastUpdated: latest[0]?.lastUpdate || null });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  } finally {
-    await client.close();
-  }
-});
-
-// ─────────────────────────────────────────
-// GET /api/last-refreshed  (อัพเดตยอดล่าสุด)
-// ดึงจาก lastUpdate เหมือนกัน (YouTube ไม่มี lastSynced แยก)
-// ─────────────────────────────────────────
-app.get('/api/last-refreshed', async (req, res) => {
-  const client = new MongoClient(CONFIG.uri);
-  try {
-    await client.connect();
-    const col = client.db(CONFIG.db).collection(CONFIG.collection);
-    const latest = await col
-      .find({ platform: 'youtube', lastUpdate: { $exists: true } })
-      .sort({ lastUpdate: -1 })
-      .limit(1)
-      .toArray();
-    res.json({ lastRefreshed: latest[0]?.lastUpdate || null });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  } finally {
-    await client.close();
-  }
-});
-
-const PORT = process.env.YOUTUBE_PORT || 5001;
-app.listen(PORT, () =>
-  console.log(`🎬 YouTube backend running on port ${PORT}`)
-);
-
+// ─────────────────────────────────────────────────────────────────────────────
+// ดึงวิดีโอที่มี totalViews สูงสุด 3 อันดับแรกของแต่ละแบรนด์สำหรับ authorName ที่ระบุ
 app.get('/api/youtube/top-videos-by-brand', async (req, res) => {
     const { authorName } = req.query;
     if (!authorName) return res.status(400).json({ error: 'authorName is required' });
-
     const client = new MongoClient(CONFIG.uri);
+
     try {
         await client.connect();
         const col = client.db(CONFIG.db).collection(CONFIG.collection);
@@ -469,101 +541,7 @@ app.get('/api/youtube/top-videos-by-brand', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /api/youtube/analyze-sentiment
-// Body: { videoId }        → วิเคราะห์ comments ของวิดีโอนั้น
-//   หรือ { influencerName } → วิเคราะห์ทุก comment ของ influencer นั้น
-//
-// Logic:
-//   1. ดึง documents จาก `comments` collection ที่ sentiment === null
-//   2. วิเคราะห์ทีละ comment ผ่าน sentiment.py (concurrent 3 คัน)
-//   3. $set sentiment + confidence กลับลง document เดิม
-// ─────────────────────────────────────────────────────────────────────────────
-app.post("/api/youtube/analyze-sentiment", async (req, res) => {
-  const { videoId, influencerName } = req.body;
- 
-  if (!videoId && !influencerName)
-    return res.status(400).json({ error: "videoId or influencerName is required" });
- 
-  const client = new MongoClient(CONFIG.uri);
-  try {
-    await client.connect();
- 
-    // ใช้ comments collection (ไม่ใช่ youtuber)
-    const commentCol = client.db(CONFIG.db).collection("comments");
- 
-    // ─── หา comments ที่ยังไม่ได้วิเคราะห์ ───
-    const filter = {
-      platform: "youtube",
-      sentiment: null,             // เฉพาะที่ยังไม่มีผล
-      text: { $exists: true, $ne: "" },
-    };
-    if (videoId)        filter.videoId        = videoId;
-    if (influencerName) filter.influencerName  = new RegExp(influencerName, "i");
- 
-    const docs = await commentCol.find(filter).toArray();
- 
-    if (docs.length === 0)
-      return res.json({ message: "No pending comments found", processed: 0 });
- 
-    console.log(`💬 Analyzing ${docs.length} comments...`);
- 
-    //const limit = pLimit(3);   // วิเคราะห์พร้อมกัน 3 comment
-    let success = 0, failed = 0;
- 
-    // ในส่วน Promise.all ของเดิม
-    const limit = pLimit(10); // เพิ่ม Concurrency ได้มากขึ้นเพราะ Python ไม่ต้องโหลดโมเดลซ้ำแล้ว
-
-    await Promise.all(
-      docs.map(doc =>
-        limit(async () => {
-          try {
-            // เรียกใช้ฟังก์ชันใหม่ที่ยิง API ไปหา Python
-            const result = await analyzeSingleText(doc.text || "");
-
-            if (result.status === "success") {
-              await commentCol.updateOne(
-                { _id: doc._id },
-                {
-                  $set: {
-                    sentiment: result.sentiment, // จะได้ POSITIVE/NEUTRAL/NEGATIVE
-                    confidence: result.confidence,
-                  },
-                }
-              );
-              success++;
-            } else {
-              failed++;
-            }
-          } catch (err) {
-            failed++;
-          }
-        })
-      )
-    );
- 
-    console.log(`✅ Done: ${success} success, ${failed} failed`);
-    res.json({
-      message: `✅ Analyzed ${success} comments (${failed} failed)`,
-      total: docs.length,
-      success,
-      failed,
-    });
- 
-  } catch (err) {
-    console.error("🚨 analyze-sentiment error:", err.message);
-    res.status(500).json({ error: err.message });
-  } finally {
-    await client.close();
-  }
-});
- 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /api/youtube/sentiment-summary
-// Query: ?influencerName=xxx   → สรุป sentiment ของ influencer
-//     หรือ ?videoId=xxx         → สรุป sentiment ของวิดีโอนั้น
-//
-// คืน: positive / neutral / negative count + percent + avgConfidence
-// ─────────────────────────────────────────────────────────────────────────────
+//การคำนวณผลการวิเคราะห์คอมเมนต์จากหลายๆคลิปพร้อมกัน (ใช้ในหน้า influencer profile)
 app.get("/api/youtube/sentiment-summary", async (req, res) => {
   const { influencerName, videoId, videoIds } = req.query;
  
@@ -574,10 +552,9 @@ app.get("/api/youtube/sentiment-summary", async (req, res) => {
   try {
     await client.connect();
     const commentCol = client.db(CONFIG.db).collection("comments");
- 
     const match = { platform: "youtube", sentiment: { $ne: null } };
-    // 1. จัดการเรื่อง Video Filter
-    if (videoIds && videoIds.trim() !== "") {
+    
+    if (videoId && videoIds.trim() !== "") {
         // กรณีระบุหลายวิดีโอ (ตามแบรนด์)
         const ids = videoIds.split(',').filter(id => id.trim() !== "");
         match.videoId = { $in: ids };
@@ -589,7 +566,7 @@ app.get("/api/youtube/sentiment-summary", async (req, res) => {
         match.influencerName = new RegExp(influencerName, "i");
     }
  
-    // aggregate: group by sentiment, นับ count + avg confidence
+    // aggregate: group by sentiment,นับจำนวนคอมเมนต์ในแต่ละกลุ่ม และคำนวณค่าเฉลี่ย confidence
     const agg = await commentCol.aggregate([
       { $match: match },
       {
@@ -623,7 +600,7 @@ app.get("/api/youtube/sentiment-summary", async (req, res) => {
       ...(influencerName ? { influencerName } : {}),
       ...(videoId        ? { videoId }        : {}),
       totalComments: total,
-      dominantSentiment: dominant,
+      dominantSentiment: dominant, //Sort เพื่อหาว่าอารมณ์ไหน "มาแรงที่สุด"
       positive: byLabel["POSITIVE"] || { count: 0, percent: 0, avgConfidence: 0 },
       neutral:  byLabel["NEUTRAL"]  || { count: 0, percent: 0, avgConfidence: 0 },
       negative: byLabel["NEGATIVE"] || { count: 0, percent: 0, avgConfidence: 0 },
@@ -637,21 +614,12 @@ app.get("/api/youtube/sentiment-summary", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// วางใน youtubeServer.js (port 5001)
-//
-// GET /api/youtube/comment-samples
-// Query: ?influencerName=xxx&brand=xxx&limit=3
-//
-// Logic:
-//   1. หา videoId ทั้งหมดของอินฟลูคนนี้ที่ brand ตรงกัน จาก `youtuber` collection
-//   2. ดึง comments จาก `comments` collection ที่ videoId อยู่ในกลุ่มนั้น + มี sentiment
-//   3. แบ่งกลับเป็น positive / neutral / negative
-// ─────────────────────────────────────────────────────────────────────────────
+// ดึงตัวอย่างคอมเมนต์โดยแบ่งกลุ่มตามSentiment ใช้ในหน้า influencer profile
 app.get("/api/youtube/comment-samples", async (req, res) => {
   const { influencerName, brand, limit = 3 } = req.query;
 
   if (!influencerName || !brand)
-    return res.status(400).json({ error: "influencerName and brand are required" });
+    return res.status(400).json({ error:"ไม่พบ influencerName หรือ brand" });
 
   const client = new MongoClient(CONFIG.uri);
   try {
@@ -660,7 +628,7 @@ app.get("/api/youtube/comment-samples", async (req, res) => {
     const youtuberCol = db.collection("youtuber");
     const commentCol  = db.collection("comments");
 
-    // Step 1: หา videoId ที่ตรงกับ influencer + brand
+    //หา videoId ที่ตรงกับ influencer + brand
     const matchingVideos = await youtuberCol.find(
       {
         authorName: new RegExp(`^${influencerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
@@ -671,14 +639,12 @@ app.get("/api/youtube/comment-samples", async (req, res) => {
     ).toArray();
 
     const videoIds = matchingVideos.map(v => v.videoId).filter(Boolean);
-
     if (videoIds.length === 0) {
       return res.json({ positive: [], neutral: [], negative: [], videoIds: [] });
     }
 
+    //ดึงตัวอย่าง comment แยกตาม sentiment
     const sampleLimit = parseInt(limit);
-
-    // Step 2: ดึง comment samples แยกตาม sentiment
     const [positive, neutral, negative] = await Promise.all([
       commentCol.find(
         { videoId: { $in: videoIds }, sentiment: "POSITIVE", platform: "youtube" },
@@ -699,63 +665,60 @@ app.get("/api/youtube/comment-samples", async (req, res) => {
     res.json({ positive, neutral, negative, videoIds });
 
   } catch (err) {
-    console.error("❌ comment-samples error:", err.message);
+    console.error("comment-samples error:", err.message);
     res.status(500).json({ error: err.message });
   } finally {
     await client.close();
   }
 });
 
-app.post("/api/youtube/migrate-comments", async (req, res) => {
+// +++++++++ [SECTION 4: SYSTEM & MONITORING] ++++++++++++
+// ─────────────────────────────────────────────────────────────────────────────
+app.get("/api/youtube/health", (req, res) => {
+  res.json({ status: "ok", service: "youtube-backend", port: PORT });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+//ดึงการค้นหาล่าสุดจาก lastUpdate field ของ document ล่าสุดใน youtuber collection
+app.get('/api/last-updated', async (req, res) => {
   const client = new MongoClient(CONFIG.uri);
   try {
     await client.connect();
-    const db = client.db(CONFIG.db);
-    const youtuberCol = db.collection("youtuber");
-    const commentCol = db.collection("comments");
-
-    const videos = await youtuberCol.find({
-      platform: "youtube",
-      comments: { $exists: true, $ne: [] }
-    }).toArray();
-
-    console.log(`📦 Found ${videos.length} videos to migrate`);
-
-    let total = 0;
-
-    for (const v of videos) {
-      const commentsToInsert = (v.comments || [])
-        .filter(c => c.text && c.text.trim() !== "")
-        .map(c => ({
-          videoId: v.videoId,
-          influencerName: v.authorName,
-          channelId: v.channelId,
-          platform: "youtube",
-          text: c.text,
-          likeCount: c.likeCount || null,
-          sentiment: null,
-          confidence: null,
-        }));
-
-      if (commentsToInsert.length > 0) {
-        const bulkOps = commentsToInsert.map(c => ({
-          updateOne: {
-            filter: { videoId: c.videoId, text: c.text, platform: "youtube" },
-            update: { $setOnInsert: c },
-            upsert: true,
-          },
-        }));
-        await commentCol.bulkWrite(bulkOps, { ordered: false });
-        total += commentsToInsert.length;
-        console.log(`✅ ${v.authorName} - ${v.videoId}: ${commentsToInsert.length} comments`);
-      }
-    }
-
-    res.json({ message: `✅ Migrated ${total} comments`, total });
+    const col = client.db(CONFIG.db).collection(CONFIG.collection);
+    const latest = await col
+      .find({ platform: 'youtube', lastUpdate: { $exists: true } })
+      .sort({ lastUpdate: -1 })
+      .limit(1)
+      .toArray();
+    res.json({ lastUpdated: latest[0]?.lastUpdate || null });
   } catch (err) {
-    console.error("❌ migrate error:", err.message);
     res.status(500).json({ error: err.message });
   } finally {
     await client.close();
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ดึงจาก lastUpdate เหมือนกัน (YouTube ไม่มี lastSynced แยก)
+app.get('/api/last-refreshed', async (req, res) => {
+  const client = new MongoClient(CONFIG.uri);
+  try {
+    await client.connect();
+    const col = client.db(CONFIG.db).collection(CONFIG.collection);
+    const latest = await col
+      .find({ platform: 'youtube', lastUpdate: { $exists: true } })
+      .sort({ lastUpdate: -1 })
+      .limit(1)
+      .toArray();
+    res.json({ lastRefreshed: latest[0]?.lastUpdate || null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    await client.close();
+  }
+});
+
+const PORT = process.env.YOUTUBE_PORT || 5001;
+app.listen(PORT, () =>
+  console.log(`🎬 YouTube backend running on port ${PORT}`)
+);

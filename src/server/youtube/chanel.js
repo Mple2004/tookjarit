@@ -9,7 +9,7 @@ async function ChannelVideos({ channelId = null, search = null, max = 5 }) {
   let authorName = "None";
   let subscribers = 0;  
 
-  // 1️⃣ ข้อมูลช่อง
+  //ดึงชื่อyoutuberและยอดซับ
   if(channelId){
     const channelRes = await youtube.channels.list({
       part: "snippet,statistics",
@@ -21,33 +21,32 @@ async function ChannelVideos({ channelId = null, search = null, max = 5 }) {
     subscribers = channel?.statistics?.subscriberCount || 0;
   }
 
-  // 2️⃣ ดึงวิดีโอจาก Search API (ใช้ได้ทั้งค้นหาในช่อง หรือค้นหาทั่วไป)
+  //ดึงวิดีโอจาก Search API
   const searchParams = {
     part: "snippet",
     maxResults: max,
     type: "video",
     videoDuration: "short",
-    order: "relevance", // ค้นหาใช้ relevance จะแม่นยำกว่า date
-    regionCode: "TH",           // ✅ เฉพาะประเทศไทย
-    relevanceLanguage: "th",    // ✅ ภาษาไทย
+    order: "relevance",
+    regionCode: "TH",
+    relevanceLanguage: "th",
   };
 
   if (channelId) {
     searchParams.channelId = channelId;
     searchParams.order = "date"; // ถ้าเป็นช่องให้เอาอันล่าสุด
   } else if (search) {
-    searchParams.q = `${search} รีวิว`;
+    searchParams.q = `${search}`;
   }
   const searchRes = await youtube.search.list(searchParams);
   const items = searchRes.data.items;
   const videoIds = items.map((v) => v.id.videoId);
   const channelIds = [...new Set(items.map((v) => v.snippet.channelId))]; // ใช้ Set เพื่อไม่ให้ดึง id ช่องซ้ำกัน
-
   if (!items || items.length === 0) {
     return [];
   }
 
-  // --- ส่วนที่ 2: ดึงข้อมูลยอดซับของทุกช่องที่เจอ (จุดที่เพิ่มใหม่) ---
+  // --- ส่วนที่ 2: ดึงข้อมูลยอดซับของทุกช่องที่เจอ ---
   const channelsRes = await youtube.channels.list({
     part: "statistics,snippet",
     id: channelIds.join(","),

@@ -7,7 +7,7 @@ def get_youtube_transcript(video_id):
         # ดึงซับภาษาไทย ถ้าไม่มีให้ลองดึงภาษาอังกฤษ
         #transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['th', 'en'])
         ytt_api = YouTubeTranscriptApi()
-        id = 'xOew0YkoReU'
+        id = 'U_5oIm_q07w'
         transcript = ytt_api.fetch(id,languages=['th'])
         # for entry in transcript:
         #     print(f"{entry.text}")
@@ -24,5 +24,5 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         v_id = sys.argv[1]
         print(get_youtube_transcript(v_id))
-    test_id = 'xOew0YkoReU' 
+    test_id = 'U_5oIm_q07w' 
     print(get_youtube_transcript(test_id))
