@@ -412,67 +412,80 @@ app.get("/api/youtube/content-analysis", async (req, res) => {
   try {
     await client.connect();
     const db = client.db(CONFIG.db);
-    const youtuberCol   = db.collection("youtuber");
+    const youtuberCol = db.collection("youtuber");
     const transcriptCol = db.collection("transcripts");
 
-    const videos = await youtuberCol
-      .find({
-        authorName: new RegExp(`^${influencerName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"),
-        brand:      new RegExp(`^${brand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"),
-        platform: "youtube",
-      })
-      .sort({ totalViews: -1 })
-      .limit(5)
-      .toArray();
+    // 1. ค้นหาวิดีโอทั้งหมด
+    const videos = await youtuberCol.find({
+      authorName: new RegExp(`^${influencerName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"),
+      brand: new RegExp(`^${brand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"),
+      platform: "youtube"
+    }).toArray();
 
     if (videos.length === 0)
-      return res.json({ hashtags: [], summary: "", videoCount: 0 });
+      return res.json({ results: [], videoCount: 0 });
 
-    const topVideo = videos[0];
+    const finalData = [];
 
-    // ── ดึงจาก DB ก่อน ──
-    const transcriptDoc = await transcriptCol.findOne({ videoId: topVideo.videoId });
+    // 2. ใช้ for...of เพื่อประมวลผลทีละคลิป (Sequential)
+    for (const v of videos) {
+      console.log(`🔍 Processing video: ${v.videoId} - ${v.title}`);
 
-    // ถ้ามี hashtags ใน DB แล้ว → คืนเลย ไม่เรียก Gemini ซ้ำ
-    if (transcriptDoc?.hashtags?.length) {
-      return res.json({
-        hashtags:   transcriptDoc.hashtags,
-        summary:    transcriptDoc.summary || "",
-        videoCount: videos.length,
-        basedOn:    topVideo.title,
-        cached:     true,
-      });
+      // เช็คใน DB (Cache)
+      let transcriptDoc = await transcriptCol.findOne({ videoId: v.videoId });
+
+      if (transcriptDoc?.hashtags?.length) {
+        finalData.push({
+          videoId: v.videoId,
+          title: v.title,
+          hashtags: transcriptDoc.hashtags,
+          summary: transcriptDoc.summary || "",
+          cached: true
+        });
+        console.log(`✅ Using cached data for video: ${v.videoId} - ${v.title}`);
+        continue; // ข้ามไปคลิปถัดไปทันที
+      }
+
+      // ถ้าไม่มี Cache -> เรียก Gemini วิเคราะห์
+      try {
+        const analysis = await analyzeHashtags(
+          transcriptDoc?.transcript,
+          v.caption,
+          v.title
+        );
+
+        if (analysis) {
+          await transcriptCol.updateOne(
+            { videoId: v.videoId },
+            {
+              $set: {
+                hashtags: analysis.hashtags || [],
+                summary: analysis.summary || "",
+                analysisUpdatedAt: new Date(),
+              },
+            },
+            { upsert: true }
+          );
+
+          finalData.push({
+            videoId: v.videoId,
+            title: v.title,
+            hashtags: analysis.hashtags || [],
+            summary: analysis.summary || "",
+            cached: false
+          });
+          console.log(`✅ Analyzed and saved hashtags for video: ${v.videoId} - ${v.title}`);
+        }
+      } catch (apiErr) {
+        console.error(`❌ Error analyzing ${v.videoId}:`, apiErr.message);
+        // ในกรณีที่ตัวใดตัวหนึ่งพัง เราอาจจะเลือก push ข้อมูลเปล่าหรือข้ามไปเลยก็ได้
+      }
     }
 
-    // ── ยังไม่มี → วิเคราะห์ด้วย Gemini แล้วบันทึก ──
-    const analysis = await analyzeHashtags(
-      transcriptDoc?.transcript,
-      topVideo.caption,
-      topVideo.title
-    );
-
-    if (!analysis)
-      return res.json({ hashtags: [], summary: "", videoCount: videos.length });
-
-    // บันทึกผลลง transcripts collection
-    await transcriptCol.updateOne(
-      { videoId: topVideo.videoId },
-      {
-        $set: {
-          hashtags:           analysis.hashtags || [],
-          summary:            analysis.summary  || "",
-          analysisUpdatedAt:  new Date(),
-        },
-      },
-      { upsert: true }
-    );
-
     res.json({
-      hashtags:   analysis.hashtags || [],
-      summary:    analysis.summary  || "",
       videoCount: videos.length,
-      basedOn:    topVideo.title,
-      cached:     false,
+      analyzedCount: finalData.length,
+      results: finalData
     });
 
   } catch (err) {
@@ -581,18 +594,6 @@ app.get("/api/youtube/sentiment-summary", async (req, res) => {
     await client.connect();
     const commentCol = client.db(CONFIG.db).collection("comments");
     const match = { platform: "youtube", sentiment: { $ne: null } };
-    
-    // if (videoIds  && videoIds.trim() !== "") {
-    //     // กรณีระบุหลายวิดีโอ (ตามแบรนด์)
-    //     const ids = videoIds.split(',').filter(id => id.trim() !== "");
-    //     match.videoId = { $in: ids };
-    // } else if (videoId) {
-    //     // กรณีระบุวิดีโอเดียว
-    //     match.videoId = videoId;
-    // } else if (influencerName) {
-    //     // กรณีดูภาพรวมทั้งอินฟลู (ไม่มีการกรองวิดีโอ)
-    //     match.influencerName = new RegExp(influencerName, "i");
-    // }
 
     if (videoIds && videoIds.trim() !== "") {  // ← แก้ videoId → videoIds
         const ids = videoIds.split(',').filter(id => id.trim() !== "");

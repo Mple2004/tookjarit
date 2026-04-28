@@ -13,17 +13,19 @@ function fmtNum(n) {
     return n.toLocaleString();
 }
 
+// 1. ปรับ StatCard ให้ใช้ Border ย่อยๆ แทนเงา (ซ้อนใน Grid ใหญ่)
 function StatCard({ icon, label, value, color, note }) {
     return (
         <div style={{
-            background: '#fff', borderRadius: 14, padding: '18px 20px',
-            boxShadow: '0 2px 12px rgba(0,0,0,0.07)',
+            background: '#fff', borderRadius: 14, padding: '16px 12px',
+            border: '1px solid #f0f0f0', // ใส่กรอบบางๆ แทน Box Shadow ซ้อนทับ
             borderTop: `4px solid ${color || '#e0e0e0'}`, minWidth: 0,
+            display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center'
         }}>
-            <div style={{ fontSize: 24, marginBottom: 6 }}>{icon}</div>
-            <div style={{ fontSize: 24, fontWeight: 800, color: '#1a1a2e', fontFamily: "'Prompt', sans-serif" }}>{value}</div>
-            <div style={{ fontSize: 12, color: '#999', fontFamily: "'Prompt', sans-serif", marginTop: 2 }}>{label}</div>
-            {note && <div style={{ fontSize: 11, color: '#ccc', marginTop: 4 }}>{note}</div>}
+            <div style={{ fontSize: 20, marginBottom: 4 }}>{icon}</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: '#1a1a2e', fontFamily: "'Prompt', sans-serif" }}>{value}</div>
+            <div style={{ fontSize: 11, color: '#999', fontFamily: "'Prompt', sans-serif", marginTop: 2 }}>{label}</div>
+            {note && <div style={{ fontSize: 10, color: '#ccc', marginTop: 4 }}>{note}</div>}
         </div>
     );
 }
@@ -102,11 +104,13 @@ function SentimentDonut({ data }) {
 function CommentSampleRow({ label, color, bg, comments }) {
     if (comments.length === 0) {
         return (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, opacity: 0.45 }}>
-                <div style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }} />
-                <span style={{ fontSize: 11, color: '#aaa', fontFamily: "'Prompt', sans-serif" }}>
-                    {label} — ไม่มีตัวอย่าง
-                </span>
+            <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color, marginBottom: 6 }}>{label}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, opacity: 0.45 }}>
+                    <span style={{ fontSize: 11, color: '#aaa', fontFamily: "'Prompt', sans-serif" }}>
+                        ไม่มีตัวอย่าง
+                    </span>
+                </div>
             </div>
         );
     }
@@ -114,12 +118,12 @@ function CommentSampleRow({ label, color, bg, comments }) {
         <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color, marginBottom: 6 }}>{label}</div>
             {comments.slice(0, 2).map((c, i) => (
-                <div key={i} style={{ borderRadius: 8, padding: '8px 12px', marginBottom: 5, background: bg, borderLeft: `3px solid ${color}` }}>
-                    <span style={{ fontSize: 12, color: '#555', lineHeight: 1.5 }}>
-                        {c.text?.slice(0, 90)}{c.text?.length > 90 ? '…' : ''}
-                    </span>
+                <div key={i} style={{ borderRadius: 8, padding: '10px 12px', marginBottom: 8, background: bg, borderLeft: `3px solid ${color}` }}>
+                    <div style={{ fontSize: 12, color: '#555', lineHeight: 1.5, wordBreak: 'break-word' }}>
+                        {c.text?.slice(0, 100)}{c.text?.length > 100 ? '…' : ''}
+                    </div>
                     {c.confidence != null && (
-                        <span style={{ fontSize: 10, color: '#bbb', marginLeft: 6 }}>({(c.confidence * 100).toFixed(0)}%)</span>
+                        <div style={{ fontSize: 10, color: '#bbb', marginTop: 4, textAlign: 'right' }}>ความมั่นใจ {(c.confidence * 100).toFixed(0)}%</div>
                     )}
                 </div>
             ))}
@@ -150,106 +154,57 @@ function InfluencerAnalysisPage() {
     const decodedBrand      = decodeURIComponent(brandName      || '');
     const decodedInfluencer = decodeURIComponent(influencerName || '');
 
-    // ── ดึง videoIds ทั้งหมดของ influencer + brand นี้จาก youtuber collection ──
-    // ใช้ /api/youtube/data ที่มีอยู่แล้ว กรองด้วย authorName + brand
     const fetchBrandVideoIds = useCallback(async () => {
         try {
-            const res = await fetch(
-                `${API}/api/youtube/data` +
-                `?authorName=${encodeURIComponent(decodedInfluencer)}` +
-                `&brand=${encodeURIComponent(decodedBrand)}` +
-                `&limit=200`
-            );
+            const res = await fetch(`${API}/api/youtube/data?authorName=${encodeURIComponent(decodedInfluencer)}&brand=${encodeURIComponent(decodedBrand)}&limit=200`);
             const data = await res.json();
-            const ids = (data?.data || [])
-                .map(d => d.videoId)
-                .filter(Boolean);
-            return ids;
-        } catch {
-            return [];
-        }
+            return (data?.data || []).map(d => d.videoId).filter(Boolean);
+        } catch { return []; }
     }, [decodedInfluencer, decodedBrand]);
 
-    // ── loadSentiment รับ videoIds ──────────────────────────────────────────
     const loadSentiment = useCallback(async (brandVideoIds) => {
-        if (!brandVideoIds || brandVideoIds.length === 0) {
-            setSentiment(null);
-            return;
-        }
+        if (!brandVideoIds || brandVideoIds.length === 0) { setSentiment(null); return; }
         setSentimentLoading(true);
         try {
-            const res = await fetch(
-                `${API}/api/youtube/sentiment-summary` +
-                `?influencerName=${encodeURIComponent(decodedInfluencer)}` +
-                `&videoIds=${brandVideoIds.join(',')}`
-            );
+            const res = await fetch(`${API}/api/youtube/sentiment-summary?influencerName=${encodeURIComponent(decodedInfluencer)}&videoIds=${brandVideoIds.join(',')}`);
             const data = await res.json();
             setSentiment(data && !data.message ? data : null);
-        } catch (err) {
-            console.error('sentiment-summary error:', err);
-            setSentiment(null);
-        } finally {
-            setSentimentLoading(false);
-        }
+        } catch (err) { setSentiment(null); } 
+        finally { setSentimentLoading(false); }
     }, [decodedInfluencer]);
 
-    // ── loadCommentSamples ──────────────────────────────────────────────────
     const loadCommentSamples = useCallback(async () => {
         try {
-            const res = await fetch(
-                `${API}/api/youtube/comment-samples` +
-                `?influencerName=${encodeURIComponent(decodedInfluencer)}` +
-                `&brand=${encodeURIComponent(decodedBrand)}` +
-                `&limit=1`
-            );
+            const res = await fetch(`${API}/api/youtube/comment-samples?influencerName=${encodeURIComponent(decodedInfluencer)}&brand=${encodeURIComponent(decodedBrand)}&limit=3`);
             const data = await res.json();
-            setCommentSamples({
-                positive: data.positive || [],
-                negative: data.negative || [],
-                neutral:  data.neutral  || [],
-            });
-        } catch (err) {
-            console.error('comment samples error:', err);
-        }
+            setCommentSamples({ positive: data.positive || [], negative: data.negative || [], neutral:  data.neutral  || [] });
+        } catch (err) { console.error(err); }
     }, [decodedInfluencer, decodedBrand]);
 
-    // ── Main useEffect ──────────────────────────────────────────────────────
     useEffect(() => {
         if (!influencerName) return;
         setLoading(true);
 
-        // โหลดข้อมูลหลัก + top videos พร้อมกัน
         Promise.all([
-            fetch(`${API}/api/youtube/data?authorName=${encodeURIComponent(decodedInfluencer)}&limit=1`)
-                .then(r => r.json()).catch(() => ({})),
-            fetch(`${API}/api/youtube/data?authorName=${encodeURIComponent(decodedInfluencer)}&limit=500`)  // เพิ่ม limit ให้สูงขึ้น
-            .then(r => r.json()).catch(() => ({ data: [] })),
+            fetch(`${API}/api/youtube/data?authorName=${encodeURIComponent(decodedInfluencer)}&limit=1`).then(r => r.json()).catch(() => ({})),
+            fetch(`${API}/api/youtube/data?authorName=${encodeURIComponent(decodedInfluencer)}&limit=500`).then(r => r.json()).catch(() => ({ data: [] })),
         ]).then(([ytData, videos]) => {
             setYtInfo(ytData?.data?.[0] || null);
-            const allVideos = videos?.data || [];
-            setTopVideos(allVideos);
+            setTopVideos(videos?.data || []);
             loadAvatarForNode({ name: decodedInfluencer });
         }).finally(() => setLoading(false));
 
-        // ✅ ดึง videoIds ทั้งหมดของแบรนด์นี้ แล้วโหลด sentiment
-        fetchBrandVideoIds().then(ids => {
-            loadSentiment(ids);
-        });
-
-        // comment samples โหลดพร้อมกันได้เลย
+        fetchBrandVideoIds().then(ids => loadSentiment(ids));
         loadCommentSamples();
 
         setContentLoading(true);
-        fetch(`${API}/api/youtube/content-analysis` +
-        `?influencerName=${encodeURIComponent(decodedInfluencer)}` +
-        `&brand=${encodeURIComponent(decodedBrand)}`)
+        fetch(`${API}/api/youtube/content-analysis?influencerName=${encodeURIComponent(decodedInfluencer)}&brand=${encodeURIComponent(decodedBrand)}`)
         .then(r => r.json())
-        .then(data => setContentAnalysis(data?.hashtags?.length ? data : null))
+        .then(data => {setContentAnalysis(data?.results || []);})
         .catch(() => setContentAnalysis(null))
         .finally(() => setContentLoading(false));
 
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [influencerName]);
+    }, [influencerName, decodedInfluencer, decodedBrand, fetchBrandVideoIds, loadSentiment, loadCommentSamples, loadAvatarForNode]);
 
     useEffect(() => {
         const timer = setInterval(() => {
@@ -287,41 +242,59 @@ function InfluencerAnalysisPage() {
                 </span>
             </div>
 
-            {/* Channel Header */}
-            <div style={styles.channelHeader}>
-                <div style={styles.channelAvatar}>
-                    {imgCache.current[decodedInfluencer]?.src
-                        ? <img src={imgCache.current[decodedInfluencer].src} alt={decodedInfluencer}
-                            style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
-                        : decodedInfluencer.charAt(0).toUpperCase()
-                    }
+            {/* แถวที่ 1: Engagement (ซ้าย) + Profile & Stat (ขวา) */}
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px', marginBottom: '20px' }}>
+                
+                {/* ซ้ายกว้าง: Engagement Trend */}
+                <div style={{ ...styles.card, display: 'flex', flexDirection: 'column' }}>
+                    <div style={styles.cardTitle}>
+                        <span>📈 Engagement Trend</span>
+                        <span style={styles.pendingTag}>รอผลวิเคราะห์</span>
+                    </div>
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 20px' }}>
+                        <div style={{ ...styles.chartPlaceholder, width: '100%', maxWidth: 400, height: 180 }}>
+                            <span style={{ fontSize: 40 }}>📊</span>
+                            <div style={{ fontSize: 14, color: '#ccc', marginTop: 12, fontFamily: "'Prompt', sans-serif" }}>กราฟ engagement ตามเวลา</div>
+                        </div>
+                        <div style={{ ...styles.placeholderNote, marginTop: 16 }}>
+                            แสดง views, likes, comments ของวิดีโอที่โปรโมทแบรนด์ตามลำดับเวลา
+                        </div>
+                    </div>
                 </div>
-                <div style={{ flex: 1 }}>
-                    <h1 style={styles.channelName}>{decodedInfluencer}</h1>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                        <span style={styles.platformBadge}>▶ YouTube</span>
-                        <span style={styles.brandBadge}>🏷️ {decodedBrand}</span>
+
+                {/* ขวาแคบ: 1 Grid ใหญ่ ครอบ Profile และ Stat 2x2 (ดีไซน์ตามรูป 1) */}
+                <div style={{ ...styles.card, display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                    
+                    {/* Profile Section */}
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: '8px' }}>
+                        <div style={{ width: 80, height: 80, borderRadius: '50%', background: '#2d3436', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 32, color: '#fff', fontWeight: 800, marginBottom: 12 }}>
+                            {imgCache.current[decodedInfluencer]?.src
+                                ? <img src={imgCache.current[decodedInfluencer].src} alt={decodedInfluencer} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                : decodedInfluencer.charAt(0).toUpperCase()
+                            }
+                        </div>
+                        <h1 style={{ fontSize: 18, fontWeight: 800, color: '#1a1a2e', margin: '0 0 10px', textAlign: 'center' }}>{decodedInfluencer}</h1>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
+                            <span style={styles.platformBadge}>YouTube</span>
+                            <span style={styles.brandBadge}>{decodedBrand}</span>
+                        </div>
+                    </div>
+
+                    {/* Stat Grid 2x2 */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                        <StatCard icon="👥" label="Subscribers" value={fmtNum(ytInfo?.subscribers)} color="#6c5ce7" />
+                        <StatCard icon="👁️" label="Channel Views" value={fmtNum(ytInfo?.channelViews)} color="#0984e3" />
+                        <StatCard icon="🎬" label="วิดีโอที่โปรโมท" value={totalVideos > 0 ? totalVideos : '-'} color={PLATFORM_COLOR} />
+                        <StatCard icon="💬" label="คอมเม้นที่วิเคราะห์" value={hasSentiment ? fmtNum(sentiment.totalComments) : '-'} color="#00b894" />
                     </div>
                 </div>
             </div>
 
-            {/* Stat Grid */}
-            <div style={styles.statGrid}>
-                <StatCard icon="👥" label="Subscribers" value={fmtNum(ytInfo?.subscribers)} color="#6c5ce7" />
-                <StatCard icon="👁️" label="Channel Views" value={fmtNum(ytInfo?.channelViews)} color="#0984e3" />
-                <StatCard icon="🎬" label="วิดีโอที่โปรโมทแบรนด์"
-                    value={totalVideos > 0 ? totalVideos : '-'} color={PLATFORM_COLOR}
-                    note={totalVideos === 0 ? 'รอผลวิเคราะห์' : undefined} />
-                <StatCard icon="💬" label="คอมเม้นที่วิเคราะห์แล้ว"
-                    value={hasSentiment ? fmtNum(sentiment.totalComments) : '-'} color="#00b894"
-                    note={!hasSentiment ? 'กด "วิเคราะห์ Sentiment" ด้านล่าง' : undefined} />
-            </div>
-
-            {/* Analysis Grid */}
-            <div style={styles.analysisGrid}>
-
-                {/* Sentiment */}
-                <div style={styles.card}>
+            {/* แถวที่ 2: Sentiment (ซ้าย) + Comment Samples (ขวา) */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px', marginBottom: '20px' }}>
+                
+                {/* ซ้ายแคบ: Sentiment Analysis */}
+                <div style={{ ...styles.card, display: 'flex', flexDirection: 'column' }}>
                     <div style={styles.cardTitle}>
                         <span>💬 Sentiment Analysis</span>
                         {hasSentiment
@@ -333,30 +306,27 @@ function InfluencerAnalysisPage() {
                         }
                     </div>
                     {sentimentLoading
-                        ? <div style={{ textAlign: 'center', padding: 24, color: '#ccc', fontSize: 13 }}>กำลังโหลด...</div>
-                        : <SentimentDonut data={hasSentiment ? sentiment : null} />
+                        ? <div style={{ textAlign: 'center', padding: 24, color: '#ccc', fontSize: 13, flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>กำลังโหลด...</div>
+                        : <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                            <SentimentDonut data={hasSentiment ? sentiment : null} />
+                            {!hasSentiment && (
+                                <div style={{ textAlign: 'center', fontSize: 12, color: '#999', padding: '0 10px' }}>
+                                    ระบบจะแสดงผลอัตโนมัติเมื่อมีคอมเมนต์
+                                </div>
+                            )}
+                          </div>
                     }
-                    {!hasSentiment && (
-                        <div style={{ 
-                            textAlign: 'center', 
-                            marginTop: 16, 
-                            fontSize: 13, 
-                            color: '#666',
-                            fontFamily: "'Prompt', sans-serif"
-                        }}>
-                            ระบบจะแสดงผล Sentiment โดยอัตโนมัติเมื่อมีคอมเมนต์ในวิดีโอที่โปรโมทแบรนด์
-                        </div>
-                    )}
                     {hasSentiment && (
-                        <div style={{ marginTop: 12, padding: '10px 12px', background: '#fafafa', borderRadius: 10, display: 'flex', justifyContent: 'space-around' }}>
+                        <div style={{ marginTop: 12, padding: '12px', background: '#fafafa', borderRadius: 10, display: 'flex', justifyContent: 'space-between' }}>
                             {[
                                 { label: '😊 บวก', val: sentiment.positive },
                                 { label: '😐 กลาง', val: sentiment.neutral },
                                 { label: '😞 ลบ',  val: sentiment.negative },
                             ].map(s => (
                                 <div key={s.label} style={{ textAlign: 'center' }}>
-                                    <div style={{ fontSize: 13, fontWeight: 700, color: '#2d3436' }}>{s.val.count.toLocaleString()}</div>
-                                    <div style={{ fontSize: 10, color: '#aaa' }}>{s.label}</div>
+                                    <div style={{ fontSize: 14, fontWeight: 700, color: '#2d3436' }}>{s.val.count.toLocaleString()}</div>
+                                    <div style={{ fontSize: 10, color: '#aaa', marginBottom: 2 }}>{s.label}</div>
+                                    {/* 3. เอา Confidence กลับมาแสดงใต้ Label */}
                                     <div style={{ fontSize: 10, color: '#bbb' }}>conf {(s.val.avgConfidence * 100).toFixed(0)}%</div>
                                 </div>
                             ))}
@@ -364,92 +334,7 @@ function InfluencerAnalysisPage() {
                     )}
                 </div>
 
-                {/* Content Analysis */}
-                <div style={styles.card}>
-                <div style={styles.cardTitle}>
-                    <span>📝 Content Analysis</span>
-                    {contentAnalysis
-                    ? <span style={{ ...styles.pendingTag, background: '#eafaf5', color: '#00b894' }}>วิเคราะห์แล้ว</span>
-                    : <span style={styles.pendingTag}>รอผลวิเคราะห์</span>
-                    }
-                </div>
-
-                {contentLoading ? (
-                    <div style={{ textAlign: 'center', padding: 24, color: '#ccc', fontSize: 13 }}>
-                    กำลังวิเคราะห์...
-                    </div>
-                ) : contentAnalysis ? (
-                    <div style={{ padding: '12px 0' }}>
-                    {/* Summary */}
-                    {contentAnalysis.summary && (
-                        <div style={{
-                        fontSize: 12, color: '#555', lineHeight: 1.7,
-                        background: '#fafafa', borderRadius: 10,
-                        padding: '10px 14px', marginBottom: 14,
-                        borderLeft: '3px solid #6c5ce7',
-                        fontFamily: "'Prompt', sans-serif",
-                        }}>
-                        {contentAnalysis.summary}
-                        </div>
-                    )}
-
-                    {/* Hashtags */}
-                    <div style={{ fontSize: 11, color: '#aaa', fontWeight: 600, marginBottom: 8 }}>
-                        Hashtag ที่เกี่ยวข้อง
-                    </div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-                        {contentAnalysis.hashtags.map((tag, i) => (
-                        <span key={i} style={{
-                            fontSize: 12, fontWeight: 700,
-                            borderRadius: 20, padding: '5px 14px',
-                            background: ['#e8f4fd', '#eafaf5', '#fef9e7'][i % 3],
-                            color: ['#0984e3', '#00b894', '#f39c12'][i % 3],
-                        }}>
-                            {tag}
-                        </span>
-                        ))}
-                    </div>
-
-                    {/* Based on */}
-                    {contentAnalysis.basedOn && (
-                        <div style={{ fontSize: 10, color: '#ccc', marginTop: 4, fontFamily: "'Prompt', sans-serif" }}>
-                        วิเคราะห์จาก: {contentAnalysis.basedOn?.slice(0, 50)}...
-                        </div>
-                    )}
-                    </div>
-                ) : (
-                    <div style={{ padding: '20px 0' }}>
-                    <div style={styles.placeholderLabel}>Keyword ที่พบบ่อย</div>
-                    <div style={styles.tagCloud}>
-                        {['คำสำคัญ', 'Topic', 'Theme', 'Brand mention', 'Engagement'].map(t => (
-                        <span key={t} style={{ ...styles.tag, background: '#f0f0f0', color: '#bbb' }}>{t}</span>
-                        ))}
-                    </div>
-                    <div style={styles.placeholderNote}>
-                        ระบบจะแสดง keyword หลัก, theme ของคอนเทนต์<br />และการกล่าวถึงแบรนด์ในวิดีโอ
-                    </div>
-                    </div>
-                )}
-                </div>
-
-                {/* Engagement Trend placeholder */}
-                <div style={styles.card}>
-                    <div style={styles.cardTitle}>
-                        <span>📈 Engagement Trend</span>
-                        <span style={styles.pendingTag}>รอผลวิเคราะห์</span>
-                    </div>
-                    <div style={{ padding: '20px 0', textAlign: 'center' }}>
-                        <div style={styles.chartPlaceholder}>
-                            <span style={{ fontSize: 32 }}>📊</span>
-                            <div style={{ fontSize: 12, color: '#ccc', marginTop: 8, fontFamily: "'Prompt', sans-serif" }}>กราฟ engagement ตามเวลา</div>
-                        </div>
-                        <div style={styles.placeholderNote}>
-                            แสดง views, likes, comments<br />ของวิดีโอที่โปรโมทแบรนด์ตามลำดับเวลา
-                        </div>
-                    </div>
-                </div>
-
-                {/* Comment Samples */}
+                {/* ขวากว้าง: ตัวอย่างคอมเม้น (แบ่ง 3 คอลัมน์) */}
                 <div style={styles.card}>
                     <div style={styles.cardTitle}>
                         <span>🔍 ตัวอย่างคอมเม้น</span>
@@ -458,74 +343,131 @@ function InfluencerAnalysisPage() {
                             : <span style={styles.pendingTag}>รอผลวิเคราะห์</span>
                         }
                     </div>
-                    <div style={{ padding: '12px 0' }}>
+                    <div style={{ padding: '12px 0', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
                         <CommentSampleRow label="😊 เชิงบวก" color="#00b894" bg="#eafaf5" comments={commentSamples.positive} />
                         <CommentSampleRow label="😞 เชิงลบ"  color="#e17055" bg="#fdf0ee" comments={commentSamples.negative} />
                         <CommentSampleRow label="😐 เป็นกลาง"    color="#b2bec3" bg="#f4f4f4" comments={commentSamples.neutral}  />
-                        {!hasAnySample && (
-                            <div style={styles.placeholderNote}>
-                                กด "วิเคราะห์ Sentiment" เพื่อดูตัวอย่างคอมเม้นที่ถูกจัดประเภทแล้ว
-                            </div>
-                        )}
                     </div>
+                    {!hasAnySample && (
+                        <div style={styles.placeholderNote}>
+                            กด "วิเคราะห์ Sentiment" เพื่อดูตัวอย่างคอมเม้นที่ถูกจัดประเภทแล้ว
+                        </div>
+                    )}
                 </div>
             </div>
 
-            {/* Top Videos */}
-            {/* วิดีโอทั้งหมดที่โปรโมทแบรนด์ */}
+            {/* แถวที่ 3: วิดีโอทั้งหมด (แสดงเป็นกล่อง Content Analysis รายคลิป) */}
             {brandVideos.length > 0 && (
-                <div style={{ marginTop: 24 }}>
-                    <div style={styles.sectionTitle}>
-                        🎬 วิดีโอทั้งหมดที่โปรโมท {decodedBrand} ({brandVideos.length} วิดีโอ)
+                <div style={{ marginTop: '32px' }}>
+                    <div style={{ ...styles.sectionTitle, marginBottom: '24px', display: 'flex', alignItems: 'baseline', gap: 10 }}>
+                        <span>🎬 วิดีโอที่เกี่ยวข้องกับแบรนด์</span>
+                        <span style={{ fontSize: 14, color: '#999', fontWeight: 500 }}>({brandVideos.length} รายการ)</span>
                     </div>
-                    
-                    <div style={styles.videoList}>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                         {brandVideos
                             .sort((a, b) => (b.totalViews || b.views || 0) - (a.totalViews || a.views || 0))
                             .map((v, i) => {
+                                const analysis = Array.isArray(contentAnalysis) 
+                                    ? contentAnalysis.find(a => a.videoId === v.videoId) 
+                                    : null;
+                                const videoUrl = v.videoUrl || v.url || v.link || (v.videoId ? `https://www.youtube.com/watch?v=${v.videoId}` : '');
                                 
-                                // สร้างลิงก์วิดีโอให้ครอบคลุมหลายกรณีที่ API อาจส่งมา
-                                const videoUrl = v.videoUrl || 
-                                            v.url || 
-                                            v.link || 
-                                            (v.videoId ? `https://www.youtube.com/watch?v=${v.videoId}` : '');
-
                                 return (
-                                    <div key={v.videoId || i} style={styles.videoRow}>
-                                        <div style={styles.videoRank}>#{i + 1}</div>
-                                        <div style={{ flex: 1, minWidth: 0 }}>
-                                            <div style={styles.videoTitle}>
-                                                {v.title || `วิดีโอโปรโมท ${decodedBrand}`}
-                                            </div>
-                                            <div style={{ fontSize: 11, color: '#666', marginTop: 4 }}>
-                                                👁️ {fmtNum(v.totalViews || v.views)} views
-                                                {v.publishedAt && (
-                                                    <> • {new Date(v.publishedAt).toLocaleDateString('th-TH')}</>
-                                                )}
-                                            </div>
+                                    <div key={v.videoId || i} style={{ ...styles.card, padding: '20px', display: 'grid', gridTemplateColumns: '320px 1fr', gap: '24px', position: 'relative' }}>
+                                        {/* อันดับวิดีโอ (Badge เล็กๆ มุมซ้าย) */}
+                                        <div style={{ position: 'absolute', top: -10, left: -10, width: 32, height: 32, background: '#1a1a2e', color: '#fff', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 14, boxShadow: '0 4px 8px rgba(0,0,0,0.2)', zIndex: 2 }}>
+                                            {i + 1}
                                         </div>
 
-                                        {/* ปุ่มดูวิดีโอ - แก้ไขให้แสดงเสมอเมื่อมี videoId */}
-                                        {videoUrl ? (
-                                            <a 
-                                                href={videoUrl} 
-                                                target="_blank" 
-                                                rel="noreferrer"
-                                                style={styles.watchBtn} 
-                                                onClick={e => e.stopPropagation()}
-                                            >
-                                                ▶ ดูวิดีโอ
-                                            </a>
-                                        ) : (
-                                            <span style={{ 
-                                                padding: '6px 14px', 
-                                                fontSize: 11, 
-                                                color: '#999', 
-                                                fontWeight: 500 
-                                            }}>
-                                                ไม่มีลิงก์
-                                            </span>
-                                        )}
+                                        {/* ส่วนภาพปก (Thumbnail) - คลิกเพื่อเปิดวิดีโอ */}
+                                        <a 
+                                            href={videoUrl} 
+                                            target="_blank" 
+                                            rel="noreferrer" 
+                                            style={{ 
+                                                display: 'block', 
+                                                background: '#000', 
+                                                borderRadius: '12px', 
+                                                overflow: 'hidden', 
+                                                aspectRatio: '16/9', 
+                                                cursor: 'pointer',
+                                                position: 'relative',
+                                                border: '1px solid #eee'
+                                            }}
+                                        >
+                                            {v.videoId ? (
+                                                <img 
+                                                    src={`https://img.youtube.com/vi/${v.videoId}/hqdefault.jpg`} 
+                                                    alt="ปกคลิป" 
+                                                    style={{ width: '100%', height: '100%', objectFit: 'cover', transition: 'transform 0.3s ease' }}
+                                                    onMouseOver={e => e.currentTarget.style.transform = 'scale(1.05)'}
+                                                    onMouseOut={e => e.currentTarget.style.transform = 'scale(1)'}
+                                                />
+                                            ) : (
+                                                <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#666' }}>ไม่มีภาพปก</div>
+                                            )}
+                                            {/* Play Overlay */}
+                                            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.1)' }}>
+                                                <div style={{ width: 44, height: 44, background: 'rgba(204, 0, 0, 0.9)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 18 }}>▶</div>
+                                            </div>
+                                        </a>
+
+                                        {/* ส่วนข้อมูลด้านขวา */}
+                                        <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                                            <div>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
+                                                    <h3 style={{ fontSize: '17px', fontWeight: 700, color: '#1a1a2e', margin: '0 0 8px', lineHeight: 1.4 }}>
+                                                        {v.title || `วิดีโอโปรโมท ${decodedBrand}`}
+                                                    </h3>
+                                                    {videoUrl && (
+                                                        <a href={videoUrl} target="_blank" rel="noreferrer" style={styles.watchBtn}>
+                                                            ดูบน YouTube
+                                                        </a>
+                                                    )}
+                                                </div>
+
+                                                <div style={{ fontSize: '13px', color: '#666', marginBottom: '16px', display: 'flex', gap: '16px', alignItems: 'center' }}>
+                                                    <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>👁️ {fmtNum(v.totalViews || v.views)} views</span>
+                                                    {v.publishedAt && <span>📅 {new Date(v.publishedAt).toLocaleDateString('th-TH', { year: 'numeric', month: 'short', day: 'numeric' })}</span>}
+                                                </div>
+
+                                                {/* Content Analysis Inner Box */}
+                                                <div style={{ background: '#f8f9fa', padding: '14px', borderRadius: '10px', border: '1px solid #f0f0f0' }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                                                        <span style={{ fontSize: 13, fontWeight: 700, color: '#2d3436' }}>📝 สรุปเนื้อหา</span>
+                                                        {analysis ? (
+                                                        <span style={{ ...styles.pendingTag, background: '#eafaf5', color: '#00b894' }}>
+                                                            วิเคราะห์แล้ว {analysis.cached ? '(Cache)' : ''}
+                                                        </span>
+                                                        ) : (
+                                                        <span style={styles.pendingTag}>รอผลวิเคราะห์</span>
+                                                        )}
+                                                    </div>
+                                                    
+                                                    {contentLoading ? (
+                                                        <div style={{ color: '#ccc', fontSize: 13 }}>กำลังวิเคราะห์...</div>
+                                                    ) : analysis ? (
+                                                        <div>
+                                                        {analysis.summary && (
+                                                            <div style={{ fontSize: 13, color: '#555', lineHeight: 1.6, marginBottom: 16 }}>
+                                                            {analysis.summary}
+                                                            </div>
+                                                        )}
+                                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                                            {analysis.hashtags?.map((tag, idx) => (
+                                                            <span key={idx} style={{ ...styles.tagStyle }}>
+                                                                {tag}
+                                                            </span>
+                                                            ))}
+                                                        </div>
+                                                        </div>
+                                                    ) : (
+                                                        <div style={{ color: '#999', fontSize: 13 }}>ไม่พบข้อมูลวิเคราะห์สำหรับคลิปนี้</div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
                                 );
                             })}
@@ -543,27 +485,27 @@ const styles = {
     breadcrumb: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 22, flexWrap: 'wrap' },
     backBtn: { background: 'none', border: '1.5px solid #ddd', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 13, color: '#555', fontFamily: "'Prompt', sans-serif" },
     breadPath: { fontSize: 14, fontFamily: "'Prompt', sans-serif" },
-    channelHeader: { display: 'flex', alignItems: 'center', gap: 18, background: '#fff', borderRadius: 16, padding: '18px 22px', marginBottom: 20, boxShadow: '0 2px 12px rgba(0,0,0,0.07)' },
-    channelAvatar: { width: 64, height: 64, borderRadius: '50%', background: '#2d3436', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26, color: '#fff', fontWeight: 800, flexShrink: 0 },
-    channelName: { fontSize: 20, fontWeight: 800, color: '#1a1a2e', margin: '0 0 8px' },
-    platformBadge: { fontSize: 11, fontWeight: 700, color: '#fff', background: PLATFORM_COLOR, borderRadius: 20, padding: '3px 12px' },
-    brandBadge: { fontSize: 11, fontWeight: 700, color: '#636e72', background: '#f0f0f0', borderRadius: 20, padding: '3px 12px' },
-    statGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 14, marginBottom: 20 },
-    analysisGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 },
-    card: { background: '#fff', borderRadius: 16, padding: '18px 20px', boxShadow: '0 2px 12px rgba(0,0,0,0.07)' },
-    cardTitle: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 14, fontWeight: 700, color: '#1a1a2e', marginBottom: 4 },
-    pendingTag: { fontSize: 10, fontWeight: 600, color: '#aaa', background: '#f4f4f4', borderRadius: 20, padding: '2px 8px' },
-    placeholderNote: { fontSize: 11, color: '#ccc', textAlign: 'center', lineHeight: 1.6, padding: '8px 0', fontFamily: "'Prompt', sans-serif" },
-    placeholderLabel: { fontSize: 11, color: '#aaa', fontWeight: 600, marginBottom: 8, fontFamily: "'Prompt', sans-serif" },
-    tagCloud: { display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 },
-    tag: { fontSize: 11, fontWeight: 600, borderRadius: 20, padding: '3px 10px' },
-    chartPlaceholder: { height: 100, background: '#fafafa', borderRadius: 10, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', border: '1.5px dashed #ececec' },
-    sectionTitle: { fontSize: 15, fontWeight: 700, color: '#2d3436', marginBottom: 12, fontFamily: "'Prompt', sans-serif" },
-    videoList: { background: '#fff', borderRadius: 16, overflow: 'hidden', boxShadow: '0 2px 12px rgba(0,0,0,0.07)' },
-    videoRow: { display: 'flex', alignItems: 'center', gap: 14, padding: '14px 18px', borderBottom: '1px solid #f5f5f5' },
-    videoRank: { fontSize: 16, fontWeight: 800, color: '#ddd', width: 28, textAlign: 'center' },
-    videoTitle: { fontSize: 13, fontWeight: 600, color: '#2d3436', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-    watchBtn: { padding: '6px 14px', borderRadius: 8, background: PLATFORM_COLOR, color: '#fff', fontSize: 11, fontWeight: 700, textDecoration: 'none', whiteSpace: 'nowrap', flexShrink: 0, fontFamily: "'Prompt', sans-serif" },
+    
+    // Cards
+    card: { background: '#fff', borderRadius: 16, padding: '20px 24px', boxShadow: '0 2px 12px rgba(0,0,0,0.07)' },
+    cardTitle: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 15, fontWeight: 700, color: '#1a1a2e', marginBottom: 12 },
+    
+    // Badges
+    platformBadge: { fontSize: 10, fontWeight: 700, color: '#fff', background: PLATFORM_COLOR, borderRadius: 20, padding: '3px 10px', border: '1px solid #cc0000' },
+    brandBadge: { fontSize: 10, fontWeight: 700, color: '#2d3436', background: '#fff', borderRadius: 20, padding: '3px 10px', border: '1px solid #ddd' },
+    pendingTag: { fontSize: 10, fontWeight: 600, color: '#aaa', background: '#f4f4f4', borderRadius: 20, padding: '4px 10px' },
+    
+    // Placeholders
+    placeholderNote: { fontSize: 12, color: '#aaa', textAlign: 'center', lineHeight: 1.6, padding: '8px 0', fontFamily: "'Prompt', sans-serif" },
+    chartPlaceholder: { background: '#fafafa', borderRadius: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', border: '1.5px dashed #ececec' },
+    
+    // Video section
+    sectionTitle: { fontSize: 18, fontWeight: 800, color: '#2d3436', marginBottom: 20, fontFamily: "'Prompt', sans-serif" },
+    videoList: { background: '#fff', borderRadius: 12, border: '1px solid #eee', overflow: 'hidden' },
+    videoRow: { display: 'flex', alignItems: 'center', gap: 14, padding: '16px 20px', borderBottom: '1px solid #f5f5f5' },
+    videoRank: { fontSize: 18, fontWeight: 800, color: '#ddd', width: 28, textAlign: 'center' },
+    videoTitle: { fontSize: 14, fontWeight: 700, color: '#2d3436', overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' },
+    watchBtn: { padding: '8px 16px', borderRadius: 8, background: PLATFORM_COLOR, color: '#fff', fontSize: 12, fontWeight: 700, textDecoration: 'none', whiteSpace: 'nowrap', flexShrink: 0, fontFamily: "'Prompt', sans-serif" },
 };
 
 export default InfluencerAnalysisPage;
