@@ -10,6 +10,7 @@ export const CATEGORIES = [
     { name: 'Pet',                    color: '#F5842B' },
     { name: 'Automotive',             color: '#234C58' },
     { name: 'Lifestyle',              color: '#3fc974' },
+    { name: 'No Brand',               color: '#b2bec3' },
 ];
 
 export const CATEGORY_COLOR_MAP = Object.fromEntries(

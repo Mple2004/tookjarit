@@ -118,8 +118,7 @@ async function ChannelVideos({ channelId = null, search = null, max = 5 }) {
         url: `https://www.youtube.com/watch?v=${v.id}`,
         totalViews: v.statistics.viewCount || 0,
         totalLikes: v.statistics.likeCount || 0,
-        totalComments: v.statistics.commentCount || 0,
-        comments: topComments // เพิ่ม Array ของคอมเมนต์เข้าไปตรงนี้
+        totalComments: v.statistics.commentCount || 0
       };
     }));
 }

@@ -6,6 +6,7 @@ const fetchChannelVideos = require("./chanel");
 const analyzeVideo = require("./brand");
 const cleanDocument = require("./cleanDoc");
 const syncToNeo4j = require("./mongoToNeo4j");
+const { fetchAndSaveTranscript } = require('./transcript');
 const pLimit = require('p-limit');
 
 const app = express();
@@ -77,44 +78,6 @@ app.post("/api/youtube/search-channel", async (req, res) => {
       return res.json({ message: "No videos found", results: [] });
     }
 
-    // ==================== BATCH SUBSCRIBER FILTER (ประหยัด Quota) ====================
-    const MIN_SUBS = parseInt(minSubscribers) || 1000;
-    const { google } = require('googleapis');
-    const yt = google.youtube({ version: 'v3', auth: process.env.YOUTUBE_API_KEY });
-
-    const uniqueChannelIds = [...new Set(videos.map(v => v.channelId).filter(Boolean))];
-
-    console.log(`📊 Checking ${uniqueChannelIds.length} unique channels (min ${MIN_SUBS} subs)`);
-
-    const batchSize = 50;
-    const channelSubsMap = new Map();
-
-    for (let i = 0; i < uniqueChannelIds.length; i += batchSize) {
-      const batchIds = uniqueChannelIds.slice(i, i + batchSize);
-
-      try {
-        const response = await yt.channels.list({
-          part: 'statistics',
-          id: batchIds.join(','),
-          fields: 'items(id,statistics/subscriberCount)',
-          maxResults: 50
-        });
-
-        (response.data.items || []).forEach(item => {
-          const subs = parseInt(item.statistics?.subscriberCount || '0');
-          channelSubsMap.set(item.id, subs);
-        });
-
-        console.log(`✅ Batch ${Math.floor(i / batchSize) + 1} completed (${batchIds.length} channels)`);
-      } catch (err) {
-        console.error(`❌ Batch ${Math.floor(i / batchSize) + 1} error:`, err.message);
-      }
-
-      if (i + batchSize < uniqueChannelIds.length) {
-        await new Promise(r => setTimeout(r, 250)); // พักเล็กน้อย
-      }
-    }
-
     // ==================== PROCESS VIDEOS ====================
     const limit = pLimit(2);   // วิเคราะห์พร้อมกันสูงสุด 2 คลิป
 
@@ -122,21 +85,9 @@ app.post("/api/youtube/search-channel", async (req, res) => {
       videos.map(v =>
         limit(async () => {
           try {
-            const subscriberCount = channelSubsMap.get(v.channelId) || 0;
-
-            if (subscriberCount < MIN_SUBS) {
-              console.log(`⏭️ Skip "${v.title}" — only ${subscriberCount} subscribers`);
-              return {
-                videoId: v.videoId,
-                title: v.title,
-                subscribers: subscriberCount,
-                skipped: true,
-                reason: "subscribers_below_minimum"
-              };
-            }
-
-            console.log(`✅ Passed: ${v.authorName} (${subscriberCount} subs) → Analyzing`);
-
+            // ─── ดึง + บันทึก Transcript ลง collection "transcripts" ───
+            const transcript = await fetchAndSaveTranscript(v.videoId);
+            
             // Analyze brand
             const existingData = await col.findOne({ videoId: v.videoId });
             const shouldAnalyze = !existingData ||
@@ -197,20 +148,20 @@ app.post("/api/youtube/search-channel", async (req, res) => {
                 }
 
                 return { videoId: v.videoId, title: v.title, brand: "No Brand", skipped: true };
-            }
+              }
 
-              finalAnalysis = {
-                brand: analysis.brand || "No Brand",
-                productType: analysis.productType || "None",
-                category: analysis.category || "None",
-              };
-            } else {
-              finalAnalysis = {
-                brand: existingData.brand,
-                productType: existingData.productType,
-                category: existingData.category,
-              };
-            }
+                finalAnalysis = {
+                  brand: analysis.brand || "No Brand",
+                  productType: analysis.productType || "None",
+                  category: analysis.category || "No Brand",
+                };
+              } else {
+                finalAnalysis = {
+                  brand: existingData.brand,
+                  productType: existingData.productType,
+                  category: existingData.category,
+                };
+              }
 
             // Update to MongoDB
             await col.updateOne(
@@ -220,7 +171,7 @@ app.post("/api/youtube/search-channel", async (req, res) => {
                   channelId: v.channelId ?? "None",
                   authorName: v.authorName ?? "None",
                   authorAvatar: v.authorAvatar || "",
-                  subscribers: subscriberCount,        // ← บันทึกจำนวน subscriber
+                  subscribers: v.subscribers || 0,        // ← บันทึกจำนวน subscriber
                   channelViews: v.channelViews || 0,
                   platform: "youtube",
                   videoId: v.videoId,
@@ -233,6 +184,7 @@ app.post("/api/youtube/search-channel", async (req, res) => {
                   brand: finalAnalysis.brand,
                   productType: finalAnalysis.productType,
                   category: finalAnalysis.category,
+                  hasTranscript: !!transcript,
                   lastUpdate: new Date(),
                 },
                 $addToSet: { comments: { $each: v.comments || [] } },
@@ -292,7 +244,7 @@ app.post("/api/youtube/search-channel", async (req, res) => {
             return {
               videoId: v.videoId,
               title: v.title,
-              subscribers: subscriberCount,
+              subscribers: v.subscribers || 0,
               ...finalAnalysis
             };
 
@@ -305,15 +257,10 @@ app.post("/api/youtube/search-channel", async (req, res) => {
     );
 
     // Sync Neo4j แบบไม่บล็อก
-    syncToNeo4j().catch(e => console.error('❌ Neo4j sync error:', e.message));
-
-    const passedCount = results.filter(r => !r.skipped || r.reason !== "subscribers_below_minimum").length;
-
+    await syncToNeo4j().catch(e => console.error('❌ Neo4j sync error:', e.message));
     res.json({
-      message: `✅ Processed ${results.length} videos (${passedCount} passed subscriber filter)`,
+      message: `✅ Processed ${results.length} videos`,
       totalFound: videos.length,
-      passedFilter: passedCount,
-      minSubscribers: MIN_SUBS,
       results,
     });
 
@@ -554,15 +501,24 @@ app.get("/api/youtube/sentiment-summary", async (req, res) => {
     const commentCol = client.db(CONFIG.db).collection("comments");
     const match = { platform: "youtube", sentiment: { $ne: null } };
     
-    if (videoId && videoIds.trim() !== "") {
-        // กรณีระบุหลายวิดีโอ (ตามแบรนด์)
+    // if (videoIds  && videoIds.trim() !== "") {
+    //     // กรณีระบุหลายวิดีโอ (ตามแบรนด์)
+    //     const ids = videoIds.split(',').filter(id => id.trim() !== "");
+    //     match.videoId = { $in: ids };
+    // } else if (videoId) {
+    //     // กรณีระบุวิดีโอเดียว
+    //     match.videoId = videoId;
+    // } else if (influencerName) {
+    //     // กรณีดูภาพรวมทั้งอินฟลู (ไม่มีการกรองวิดีโอ)
+    //     match.influencerName = new RegExp(influencerName, "i");
+    // }
+
+    if (videoIds && videoIds.trim() !== "") {  // ← แก้ videoId → videoIds
         const ids = videoIds.split(',').filter(id => id.trim() !== "");
         match.videoId = { $in: ids };
     } else if (videoId) {
-        // กรณีระบุวิดีโอเดียว
         match.videoId = videoId;
     } else if (influencerName) {
-        // กรณีดูภาพรวมทั้งอินฟลู (ไม่มีการกรองวิดีโอ)
         match.influencerName = new RegExp(influencerName, "i");
     }
  

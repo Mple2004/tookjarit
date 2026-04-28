@@ -212,33 +212,6 @@ function InfluencerAnalysisPage() {
         }
     }, [decodedInfluencer, decodedBrand]);
 
-    // ── runAnalysis ─────────────────────────────────────────────────────────
-    // const runAnalysis = async () => {
-    //     const token = localStorage.getItem('token');
-    //     setAnalyzing(true);
-    //     setAnalyzeMsg('');
-    //     try {
-    //         const res = await fetch(`${API}/api/youtube/analyze-sentiment`, {
-    //             method: 'POST',
-    //             headers: {
-    //                 'Content-Type': 'application/json',
-    //                 ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    //             },
-    //             body: JSON.stringify({ influencerName: decodedInfluencer }),
-    //         });
-    //         const data = await res.json();
-    //         setAnalyzeMsg(data.message || 'เสร็จสิ้น');
-    //         // หลังวิเคราะห์เสร็จ โหลด sentiment + samples ใหม่
-    //         const ids = await fetchBrandVideoIds();
-    //         await loadSentiment(ids);
-    //         await loadCommentSamples();
-    //     } catch (err) {
-    //         setAnalyzeMsg('เกิดข้อผิดพลาด: ' + err.message);
-    //     } finally {
-    //         setAnalyzing(false);
-    //     }
-    // };
-
     // ── Main useEffect ──────────────────────────────────────────────────────
     useEffect(() => {
         if (!influencerName) return;

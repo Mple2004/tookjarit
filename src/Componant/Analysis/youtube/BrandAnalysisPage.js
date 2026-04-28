@@ -60,27 +60,30 @@ function BrandAnalysisPage() {
         try {
             const promises = influencers.map(async (yt) => {
                 const name = yt.name;
-
-                // Step 1: ดึง videoIds ที่เกี่ยวข้องกับ influencer + brand นี้
                 let videoIds = [];
+                let totalBrandViews = 0;
+                let videoCount = 0;
+
                 try {
                     const videoRes = await fetch(
                         `${API}/api/youtube/data?authorName=${encodeURIComponent(name)}&brand=${encodeURIComponent(decodedBrand)}&limit=200`
                     );
+                    console.log("📡 GET:", videoRes); // ← ดู URL ที่ยิงจริง
                     if (videoRes.ok) {
                         const videoData = await videoRes.json();
+                        console.log("📦 videoData:", videoData); // ← ดูว่าได้ข้อมูลกลับมาไหม
                         const videos = videoData.data || [];
                         videoIds = videos.map(v => v.videoId).filter(Boolean);
+                        videoCount = videoIds.length;
+                        // ✅ คำนวณ views จากรอบเดียวกันเลย ไม่ต้องยิงซ้ำ
+                        totalBrandViews = videos.reduce((sum, v) => sum + (Number(v.totalViews) || 0), 0);
                     }
                 } catch (e) {
                     console.warn(`ไม่สามารถดึง videoIds ของ ${name}`);
                 }
+                console.log("🎬 videoIds found:", videoIds); // ← ได้ videoIds ไหม
 
                 let sentData = { totalComments: 0 };
-                let videoCount = videoIds.length;
-                let totalBrandViews = 0;
-
-                // Step 2: ดึง Sentiment โดยกรองด้วย videoIds (สำคัญ!)
                 if (videoIds.length > 0) {
                     try {
                         const sentRes = await fetch(
@@ -88,37 +91,15 @@ function BrandAnalysisPage() {
                         );
                         if (sentRes.ok) {
                             const data = await sentRes.json();
-                            if (data && typeof data.totalComments === 'number') {
-                                sentData = data;
-                            }
+                            console.log("💬 sentimentData raw:", data); // ← ดู response จริง
+                            if (data && typeof data.totalComments === 'number') sentData = data;
                         }
                     } catch (e) {
                         console.warn(`ไม่สามารถโหลด sentiment ของ ${name}`);
                     }
                 }
 
-                // คำนวณยอดวิวรวม
-                if (videoIds.length > 0) {
-                    try {
-                        const videoRes = await fetch(
-                            `${API}/api/youtube/data?authorName=${encodeURIComponent(name)}&brand=${encodeURIComponent(decodedBrand)}&limit=200`
-                        );
-                        if (videoRes.ok) {
-                            const videoData = await videoRes.json();
-                            const videos = videoData.data || [];
-                            totalBrandViews = videos.reduce((sum, v) => {
-                                return sum + (Number(v.totalViews) || Number(v.views) || 0);
-                            }, 0);
-                        }
-                    } catch (e) {}
-                }
-
-                return { 
-                    name, 
-                    sentiment: sentData, 
-                    videoCount, 
-                    totalBrandViews 
-                };
+                return { name, sentiment: sentData, videoCount, totalBrandViews };
             });
 
             const results = await Promise.all(promises);
@@ -153,10 +134,12 @@ function BrandAnalysisPage() {
             try {
                 const res = await fetch(`${API}/api/graph-data?platform=youtube`);
                 const raw = await res.json();
+                console.log("🗂️ raw nodes count:", raw.nodes?.length);  // ← เพิ่ม
 
                 const brand = raw.nodes.find(
                     n => n.name === decodedBrand && n.type === 'Brand'
                 );
+                console.log("🏷️ brand found:", brand);  // ← เพิ่ม
                 if (!brand) {
                     setLoading(false);
                     return;
@@ -178,6 +161,7 @@ function BrandAnalysisPage() {
                     })
                     .filter(Boolean)
                     .filter((n, i, arr) => arr.findIndex(x => x.id === n.id) === i);
+                console.log("👥 linked influencers:", linked);  // ← เพิ่มหลัง linked
 
                 setYoutubers(linked);
                 linked.forEach(inf => loadAvatarForNode({ name: inf.name }));

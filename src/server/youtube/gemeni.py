@@ -12,6 +12,19 @@ load_dotenv()
 
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
+def normalize_brand(brand: str) -> str:
+    if not brand or brand == "No Brand":
+        return brand
+    # ตัดช่องว่าง
+    brand = brand.strip()
+    # แทนที่ช่องว่างภายในด้วย '' (ลบช่องว่างทั้งหมด)
+    brand = re.sub(r'\s+', '', brand)
+    # แปลงเป็น lowercase ทั้งหมด
+    brand = brand.lower()
+    # Optionally capitalize first letter ถ้าต้องการให้เป็นรูปแบบ Title? แต่ที่บอกว่าเจอตัวแรกเป็นพิมพ์ใหญ่ที่เหลือเล็ก แปลงเป็น lower แล้วอาจเก็บแบบ lower
+    # หากต้องการให้ขึ้นต้นด้วยตัวพิมพ์ใหญ่: brand = brand.capitalize()
+    return brand
+
 # ─────────────────────────────
 # Utility
 # ─────────────────────────────
@@ -48,8 +61,8 @@ def analyze_text_only(title, description):
 
     กฎ:
     - ถ้ามี brand → ใส่ brand และ categoryจากรายการ แล้วให้ productType = ชื่อสินค้าหรือชนิดสินค้าที่ใกล้เคียงที่สุด
-    - ถ้ามีสินค้าแต่ไม่มี brand → brand = "No Brand" แล้วให้ productType = ชื่อสินค้า
-    - ถ้าไม่มีอะไรเลย → ทุกค่า null
+    - ถ้ามีสินค้าแต่ไม่มี brand → brand = "No Brand" category = "No Brand" แล้วให้ productType = ชื่อสินค้า
+    - ถ้าไม่มีอะไรเลย → brand → brand = "No Brand" category = "No Brand"
 
     category ต้องเลือกเพียง 1 ประเภทจากรายการนี้เท่านั้น:
     - Fashion (Clothing, Vintage, Oversize, Streetwear, Watches, Jewelry)
@@ -63,6 +76,7 @@ def analyze_text_only(title, description):
     - Pet (Pet Food, Pet Toys, Pet Care)
     - Automotive (Car Accessories, Care products)
     - Lifestyle (DIY, Handmade, Travel, Vlog, Daily Life, Random stuff)
+    - No Brand (ถ้าไม่มี brand)
 
 
     ตอบ JSON เท่านั้น:
@@ -108,10 +122,11 @@ def analyze_video(url):
                 - Pet (Pet Food, Pet Toys, Pet Care)
                 - Automotive (Car Accessories, Care products)
                 - Lifestyle (DIY, Handmade, Travel, Vlog, Daily Life, Random stuff)
+                - No Brand (ถ้าไม่มี brand)
 
                 ถ้าไม่มี brandแต่มีสินค้า:
-                - ให้ brand = "No Brand"
-                - ถ้าไม่มีอะไรเลย → null
+                - ให้ brand = "No Brand" และ productType = ชื่อสินค้า category = "No Brand"
+                - ถ้าไม่มีอะไรเลย brand = "No Brand" category = "No Brand"
 
                 ตอบ JSON:
                 {"brand": null, "productType": null, "category": null}
@@ -135,7 +150,7 @@ def analyze(url, title="None", description="None"):
     if data and (data.get("brand") or data.get("productType")):
         return {
             "status": "success",
-            "brand": data.get("brand"),
+            "brand": normalize_brand(data.get("brand")) if data.get("brand") else "No Brand",
             "productType": data.get("productType"),
             "category": data.get("category"),
         }
@@ -155,7 +170,7 @@ def analyze(url, title="None", description="None"):
 
     return {
         "status": "success" if has_product else "no_brand",
-        "brand": data.get("brand"),
+        "brand": normalize_brand(data.get("brand")) if data.get("brand") else "No Brand",
         "productType": data.get("productType"),
         "category": data.get("category"),
     }

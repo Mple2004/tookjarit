@@ -1,73 +1,123 @@
 require("dotenv").config();
 const { MongoClient } = require("mongodb");
-const analyzeSingleText = require("./sentiment"); // ไฟล์นี้ต้องใช้ axios ยิงไปที่พอร์ต 8000 แล้ว
-const pLimit = require("p-limit");
+const { execFile } = require("child_process");
+const path = require("path");
+const pLimit = require('p-limit');
+const fetchTranscript = require('../youtube/transcript.js');
 
 const CONFIG = {
-  uri: process.env.Test_MONGODB,
-  db: "InfluencerProject",
-  collection: "comments",
+    uri: process.env.Test_MONGODB,
+    db: "InfluencerProject",
+    videosCol: "youtuber",
+    transcriptsCol: "transcripts",
 };
 
-async function runNow() {
-  const client = new MongoClient(CONFIG.uri);
-  try {
-    await client.connect();
-    const commentCol = client.db(CONFIG.db).collection(CONFIG.collection);
+const LIMIT = 2; // ประมวลผลพร้อมกันสูงสุด 2 วิดีโอ
+const WAIT_TIME = 8000; // พัก 2 วินาทีระหว่างตัว
 
-    // 1. ดึงคอมเมนต์ทั้งหมดที่ยังไม่ได้วิเคราะห์
-    console.log("🔍 กำลังดึงข้อมูลจาก MongoDB...");
-    const docs = await commentCol.find({ sentiment: null }).toArray();
+async function startBatchProcess() {
+    const client = new MongoClient(CONFIG.uri);
 
-    if (docs.length === 0) {
-      return console.log("✅ ไม่มีคอมเมนต์ค้างวิเคราะห์ในฐานข้อมูล");
-    }
+    try {
+        console.log(`🔌 Connecting to MongoDB: ${CONFIG.db}...`);
+        await client.connect();
+        
+        const db = client.db(CONFIG.db);
+        const sourceCol = db.collection(CONFIG.videosCol);
+        const targetCol = db.collection(CONFIG.transcriptsCol);
 
-    console.log(`🚀 เริ่มวิเคราะห์ทั้งหมด ${docs.length} รายการ (Fast Mode)...`);
-    
-    // 2. ตั้งค่า Concurrency (รันพร้อมกันกี่รายการ)
-    // เนื่องจากตอนนี้ Python Server โหลดโมเดลรอไว้แล้ว สามารถเพิ่มเป็น 5-10 ได้เลยครับ
-    const limit = pLimit(10); 
-    let successCount = 0;
+        // 1. ดึงรายการวิดีโอทั้งหมดจากต้นทาง (ดึงมาเฉพาะ videoId)
+        const allVideos = await sourceCol.find(
+            { videoId: { $exists: true } }, 
+            { projection: { videoId: 1 } }
+        ).toArray();
+        
+        // 2. ตรวจสอบว่าตัวไหนทำเสร็จไปแล้วบ้าง
+        const completedDocs = await targetCol.find(
+            {}, 
+            { projection: { videoId: 1 } }
+        ).toArray();
+        const completedIds = new Set(completedDocs.map(d => d.videoId));
 
-    // 3. เริ่มประมวลผล
-    const tasks = docs.map((doc) =>
-      limit(async () => {
-        try {
-          // เรียกฟังก์ชันที่ยิง HTTP Request ไปหา FastAPI
-          const result = await analyzeSingleText(doc.text || "");
-          
-          if (result && result.status === "success") {
-            await commentCol.updateOne(
-              { _id: doc._id },
-              { 
-                $set: { 
-                  sentiment: result.sentiment, // POSITIVE / NEUTRAL / NEGATIVE
-                  confidence: result.confidence 
-                } 
-              }
-            );
-            successCount++;
-            
-            // แสดง Log ทุกๆ 10 รายการเพื่อติดตามความคืบหน้า
-            if (successCount % 10 === 0 || successCount === docs.length) {
-              console.log(`⏳ วิเคราะห์เสร็จแล้ว ${successCount}/${docs.length} รายการ...`);
-            }
-          }
-        } catch (err) {
-          console.error(`❌ ผิดพลาดที่ _id ${doc._id}:`, err.message);
+        // 3. กรองรายการที่ยังไม่ได้ประมวลผล
+        const pendingVideos = allVideos.filter(v => v.videoId && !completedIds.has(v.videoId));
+
+        console.log(`-------------------------------------------`);
+        console.log(`📊 Total in Source: ${allVideos.length}`);
+        console.log(`✅ Already Done   : ${completedIds.size}`);
+        console.log(`⏳ Remaining      : ${pendingVideos.length}`);
+        console.log(`-------------------------------------------`);
+
+        if (pendingVideos.length === 0) {
+            console.log("🙌 No pending videos to process.");
+            return;
         }
-      })
-    );
 
-    await Promise.all(tasks);
-    console.log(`\n🏁 เสร็จสิ้น! วิเคราะห์สำเร็จทั้งสิ้น ${successCount} รายการ`);
+        const limit = pLimit(LIMIT);
+        let currentIdx = 0;
 
-  } catch (err) {
-    console.error("🚨 เกิดข้อผิดพลาดร้ายแรง:", err);
-  } finally {
-    await client.close();
-  }
+        const tasks = pendingVideos.map((video) => {
+            return limit(async () => {
+                const vid = video.videoId;
+                currentIdx++;
+                
+                console.log(`🚀 [${currentIdx}/${pendingVideos.length}] Processing: ${vid}`);
+
+                try {
+                    // เรียกใช้ฟังก์ชันดึง Transcript
+                    const transcriptContent = await fetchTranscript(vid);
+
+                    // อัปเดตข้อมูลลง MongoDB (Native Driver Style)
+                    await targetCol.updateOne(
+                        { videoId: vid },
+                        { 
+                            $set: { 
+                                content: transcriptContent, 
+                                status: 'success', 
+                                updatedAt: new Date() 
+                            } 
+                        },
+                        { upsert: true }
+                    );
+                    console.log(`✔️  Saved: ${vid}`);
+
+                } catch (err) {
+                    console.error(`❌ Error: ${vid} -> ${err.message}`);
+                    // ถ้าโดนแบน IP ให้หยุดสคริปต์ทันที
+                    if (err.message.includes("IP is blocked") || err.message.includes("Too Many Requests")) {
+                        console.error("🚨 EMERGENCY STOP: YouTube blocked our IP. Please wait a few hours.");
+                        process.exit(1); 
+                    }
+                    
+                    // บันทึกสถานะ error
+                    await targetCol.updateOne(
+                        { videoId: vid },
+                        { 
+                            $set: { 
+                                status: 'error', 
+                                lastError: err.message, 
+                                updatedAt: new Date() 
+                            } 
+                        },
+                        { upsert: true }
+                    );
+                }
+
+                // ป้องกัน Rate Limit จาก YouTube
+                await new Promise(r => setTimeout(r, WAIT_TIME));
+            });
+        });
+
+        await Promise.all(tasks);
+        console.log(`🏁 All ${pendingVideos.length} videos have been processed.`);
+
+    } catch (error) {
+        console.error("💥 Batch Process Failed:", error);
+    } finally {
+        await client.close();
+        console.log("👋 Closed MongoDB connection.");
+        process.exit(0);
+    }
 }
 
-runNow();
+startBatchProcess();

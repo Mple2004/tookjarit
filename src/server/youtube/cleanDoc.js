@@ -5,7 +5,10 @@ function cleanText(text, isBrand = false) {
     .replace(/[^\p{L}\p{M}\p{N}\s]/gu, "")
     .replace(/\s+/g, " ")
     .trim();
-  return isBrand ? cleaned.toLowerCase() : cleaned;
+  //return isBrand ? cleaned.toLowerCase() : cleaned;
+  return isBrand
+    ? cleaned.replace(/\b\w/g, c => c.toUpperCase())
+    : cleaned;
 }
 
 async function cleanDocument(col, videoId) {
@@ -15,13 +18,8 @@ async function cleanDocument(col, videoId) {
   const updatedFields = {
     title: cleanText(doc.title),
     caption: cleanText(doc.caption),
-    brand: doc.brand ? cleanText(doc.brand, true) : doc.brand,
+    brand: doc.brand ? cleanText(doc.brand, false) : doc.brand,
     productType: doc.productType ? cleanText(doc.productType) : doc.productType,
-    category: doc.category ? cleanText(doc.category) : doc.category,
-    comments: (doc.comments || []).map(c => ({
-      text: cleanText(c.text),
-      likeCount: c.likeCount
-    }))
   };
 
   await col.updateOne(
