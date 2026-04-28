@@ -6,7 +6,7 @@ const fetchChannelVideos = require("./chanel");
 const analyzeVideo = require("./brand");
 const cleanDocument = require("./cleanDoc");
 const syncToNeo4j = require("./mongoToNeo4j");
-const { fetchAndSaveTranscript } = require('./transcript');
+const { fetchAndSaveTranscript,analyzeHashtags  } = require('./transcript');
 const pLimit = require('p-limit');
 
 const app = express();
@@ -87,7 +87,7 @@ app.post("/api/youtube/search-channel", async (req, res) => {
           try {
             // ─── ดึง + บันทึก Transcript ลง collection "transcripts" ───
             const transcript = await fetchAndSaveTranscript(v.videoId);
-            
+
             // Analyze brand
             const existingData = await col.findOne({ videoId: v.videoId });
             const shouldAnalyze = !existingData ||
@@ -396,6 +396,87 @@ app.post("/api/youtube/analyze-sentiment", async (req, res) => {
  
   } catch (err) {
     console.error("analyze-sentiment error:", err.message);
+    res.status(500).json({ error: err.message });
+  } finally {
+    await client.close();
+  }
+});
+
+// ─── วิเคราะห์ hashtag ด้วย Gemini ───
+app.get("/api/youtube/content-analysis", async (req, res) => {
+  const { influencerName, brand } = req.query;
+  if (!influencerName || !brand)
+    return res.status(400).json({ error: "influencerName and brand are required" });
+
+  const client = new MongoClient(CONFIG.uri);
+  try {
+    await client.connect();
+    const db = client.db(CONFIG.db);
+    const youtuberCol   = db.collection("youtuber");
+    const transcriptCol = db.collection("transcripts");
+
+    const videos = await youtuberCol
+      .find({
+        authorName: new RegExp(`^${influencerName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"),
+        brand:      new RegExp(`^${brand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"),
+        platform: "youtube",
+      })
+      .sort({ totalViews: -1 })
+      .limit(5)
+      .toArray();
+
+    if (videos.length === 0)
+      return res.json({ hashtags: [], summary: "", videoCount: 0 });
+
+    const topVideo = videos[0];
+
+    // ── ดึงจาก DB ก่อน ──
+    const transcriptDoc = await transcriptCol.findOne({ videoId: topVideo.videoId });
+
+    // ถ้ามี hashtags ใน DB แล้ว → คืนเลย ไม่เรียก Gemini ซ้ำ
+    if (transcriptDoc?.hashtags?.length) {
+      return res.json({
+        hashtags:   transcriptDoc.hashtags,
+        summary:    transcriptDoc.summary || "",
+        videoCount: videos.length,
+        basedOn:    topVideo.title,
+        cached:     true,
+      });
+    }
+
+    // ── ยังไม่มี → วิเคราะห์ด้วย Gemini แล้วบันทึก ──
+    const analysis = await analyzeHashtags(
+      transcriptDoc?.transcript,
+      topVideo.caption,
+      topVideo.title
+    );
+
+    if (!analysis)
+      return res.json({ hashtags: [], summary: "", videoCount: videos.length });
+
+    // บันทึกผลลง transcripts collection
+    await transcriptCol.updateOne(
+      { videoId: topVideo.videoId },
+      {
+        $set: {
+          hashtags:           analysis.hashtags || [],
+          summary:            analysis.summary  || "",
+          analysisUpdatedAt:  new Date(),
+        },
+      },
+      { upsert: true }
+    );
+
+    res.json({
+      hashtags:   analysis.hashtags || [],
+      summary:    analysis.summary  || "",
+      videoCount: videos.length,
+      basedOn:    topVideo.title,
+      cached:     false,
+    });
+
+  } catch (err) {
+    console.error("content-analysis error:", err.message);
     res.status(500).json({ error: err.message });
   } finally {
     await client.close();

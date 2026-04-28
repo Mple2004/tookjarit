@@ -345,6 +345,19 @@ app.post('/api/search-youtube', authMiddleware, async (req, res) => {
   }
 });
 
+app.get("/api/youtube/content-analysis", async (req, res) => {
+    try {
+        const response = await axios.get(
+            `${YOUTUBE_SERVICE}/api/youtube/content-analysis`,
+            { params: req.query, timeout: 300000 }
+        );
+        res.json(response.data);
+    } catch (err) {
+        console.error('❌ YouTube service error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // POST /api/youtube-sync-neo4j  →  YouTube service: POST /api/youtube/sync-neo4j
 app.post('/api/youtube-sync-neo4j', authMiddleware, async (req, res) => {
   try {

@@ -141,8 +141,9 @@ function InfluencerAnalysisPage() {
 
     const [sentiment, setSentiment]               = useState(null);
     const [sentimentLoading, setSentimentLoading] = useState(false);
-    // const [analyzing, setAnalyzing]               = useState(false);
-    // const [analyzeMsg, setAnalyzeMsg]             = useState('');
+    
+    const [contentAnalysis, setContentAnalysis] = useState(null);
+    const [contentLoading, setContentLoading]   = useState(false);
 
     const [commentSamples, setCommentSamples] = useState({ positive: [], negative: [], neutral: [] });
 
@@ -237,6 +238,15 @@ function InfluencerAnalysisPage() {
 
         // comment samples โหลดพร้อมกันได้เลย
         loadCommentSamples();
+
+        setContentLoading(true);
+        fetch(`${API}/api/youtube/content-analysis` +
+        `?influencerName=${encodeURIComponent(decodedInfluencer)}` +
+        `&brand=${encodeURIComponent(decodedBrand)}`)
+        .then(r => r.json())
+        .then(data => setContentAnalysis(data?.hashtags?.length ? data : null))
+        .catch(() => setContentAnalysis(null))
+        .finally(() => setContentLoading(false));
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [influencerName]);
@@ -354,23 +364,72 @@ function InfluencerAnalysisPage() {
                     )}
                 </div>
 
-                {/* Content Analysis placeholder */}
+                {/* Content Analysis */}
                 <div style={styles.card}>
-                    <div style={styles.cardTitle}>
-                        <span>📝 Content Analysis</span>
-                        <span style={styles.pendingTag}>รอผลวิเคราะห์</span>
+                <div style={styles.cardTitle}>
+                    <span>📝 Content Analysis</span>
+                    {contentAnalysis
+                    ? <span style={{ ...styles.pendingTag, background: '#eafaf5', color: '#00b894' }}>วิเคราะห์แล้ว</span>
+                    : <span style={styles.pendingTag}>รอผลวิเคราะห์</span>
+                    }
+                </div>
+
+                {contentLoading ? (
+                    <div style={{ textAlign: 'center', padding: 24, color: '#ccc', fontSize: 13 }}>
+                    กำลังวิเคราะห์...
                     </div>
+                ) : contentAnalysis ? (
+                    <div style={{ padding: '12px 0' }}>
+                    {/* Summary */}
+                    {contentAnalysis.summary && (
+                        <div style={{
+                        fontSize: 12, color: '#555', lineHeight: 1.7,
+                        background: '#fafafa', borderRadius: 10,
+                        padding: '10px 14px', marginBottom: 14,
+                        borderLeft: '3px solid #6c5ce7',
+                        fontFamily: "'Prompt', sans-serif",
+                        }}>
+                        {contentAnalysis.summary}
+                        </div>
+                    )}
+
+                    {/* Hashtags */}
+                    <div style={{ fontSize: 11, color: '#aaa', fontWeight: 600, marginBottom: 8 }}>
+                        Hashtag ที่เกี่ยวข้อง
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+                        {contentAnalysis.hashtags.map((tag, i) => (
+                        <span key={i} style={{
+                            fontSize: 12, fontWeight: 700,
+                            borderRadius: 20, padding: '5px 14px',
+                            background: ['#e8f4fd', '#eafaf5', '#fef9e7'][i % 3],
+                            color: ['#0984e3', '#00b894', '#f39c12'][i % 3],
+                        }}>
+                            {tag}
+                        </span>
+                        ))}
+                    </div>
+
+                    {/* Based on */}
+                    {contentAnalysis.basedOn && (
+                        <div style={{ fontSize: 10, color: '#ccc', marginTop: 4, fontFamily: "'Prompt', sans-serif" }}>
+                        วิเคราะห์จาก: {contentAnalysis.basedOn?.slice(0, 50)}...
+                        </div>
+                    )}
+                    </div>
+                ) : (
                     <div style={{ padding: '20px 0' }}>
-                        <div style={styles.placeholderLabel}>Keyword ที่พบบ่อย</div>
-                        <div style={styles.tagCloud}>
-                            {['คำสำคัญ', 'Topic', 'Theme', 'Brand mention', 'Engagement'].map(t => (
-                                <span key={t} style={{ ...styles.tag, background: '#f0f0f0', color: '#bbb' }}>{t}</span>
-                            ))}
-                        </div>
-                        <div style={styles.placeholderNote}>
-                            ระบบจะแสดง keyword หลัก, theme ของคอนเทนต์<br />และการกล่าวถึงแบรนด์ในวิดีโอ
-                        </div>
+                    <div style={styles.placeholderLabel}>Keyword ที่พบบ่อย</div>
+                    <div style={styles.tagCloud}>
+                        {['คำสำคัญ', 'Topic', 'Theme', 'Brand mention', 'Engagement'].map(t => (
+                        <span key={t} style={{ ...styles.tag, background: '#f0f0f0', color: '#bbb' }}>{t}</span>
+                        ))}
                     </div>
+                    <div style={styles.placeholderNote}>
+                        ระบบจะแสดง keyword หลัก, theme ของคอนเทนต์<br />และการกล่าวถึงแบรนด์ในวิดีโอ
+                    </div>
+                    </div>
+                )}
                 </div>
 
                 {/* Engagement Trend placeholder */}
