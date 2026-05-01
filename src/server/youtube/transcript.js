@@ -1,8 +1,20 @@
-const { execFile } = require("child_process");
+const { execFile, execSync } = require("child_process");
 const path = require("path");
 require("dotenv").config();
 const { MongoClient } = require("mongodb");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+
+// หา python command ที่ใช้ได้
+function getPythonCmd() {
+  try {
+    const result = execSync("where python", { encoding: "utf8" });
+    return result.trim().split("\n")[0].trim(); // เอา path แรก
+  } catch {
+    return "python";
+  }
+}
+
+const python = getPythonCmd(); // ← เพิ่มบรรทัดนี้
  
 const CONFIG = {
   uri: process.env.Test_MONGODB,
@@ -24,7 +36,7 @@ function fetchTranscript(videoId) {
   };
 
   return new Promise((resolve) => {            // ← resolve เท่านั้น ไม่มี reject
-    execFile(PYTHON, [scriptPath, videoId], options, (error, stdout, stderr) => {
+    execFile(python, [scriptPath, videoId], options, (error, stdout, stderr) => {
       try {
         const output = stdout?.toString("utf8").trim() || "";
         const match = output.match(/\{[\s\S]*\}/);

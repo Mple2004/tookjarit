@@ -1,10 +1,16 @@
 // Analysis/youtube/InfluencerAnalysisPage.js
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAvatarCache } from '../hooks/useAvatarCache';
+import { Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart } from 'recharts';
 
 const API = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 const PLATFORM_COLOR = '#cc0000';
+const CHART_COLORS = {
+    views: { stroke: '#0984e3', fill: 'url(#colorViews)' }, // ฟ้า Blue
+    likes: { stroke: '#6c5ce7', fill: '#6c5ce7' },          // ม่วง Purple
+    comments: { stroke: '#00b894', fill: '#00b894' }       // เขียว Mint
+};
 
 function fmtNum(n) {
     if (!n || n === 0) return '-';
@@ -13,7 +19,6 @@ function fmtNum(n) {
     return n.toLocaleString();
 }
 
-// 1. ปรับ StatCard ให้ใช้ Border ย่อยๆ แทนเงา (ซ้อนใน Grid ใหญ่)
 function StatCard({ icon, label, value, color, note }) {
     return (
         <div style={{
@@ -117,7 +122,7 @@ function CommentSampleRow({ label, color, bg, comments }) {
     return (
         <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color, marginBottom: 6 }}>{label}</div>
-            {comments.slice(0, 2).map((c, i) => (
+            {comments.slice(0, 3).map((c, i) => (
                 <div key={i} style={{ borderRadius: 8, padding: '10px 12px', marginBottom: 8, background: bg, borderLeft: `3px solid ${color}` }}>
                     <div style={{ fontSize: 12, color: '#555', lineHeight: 1.5, wordBreak: 'break-word' }}>
                         {c.text?.slice(0, 100)}{c.text?.length > 100 ? '…' : ''}
@@ -148,6 +153,7 @@ function InfluencerAnalysisPage() {
     
     const [contentAnalysis, setContentAnalysis] = useState(null);
     const [contentLoading, setContentLoading]   = useState(false);
+    const [analyzingVideos, setAnalyzingVideos] = useState({}); // { videoId: true/false }
 
     const [commentSamples, setCommentSamples] = useState({ positive: [], negative: [], neutral: [] });
 
@@ -215,6 +221,62 @@ function InfluencerAnalysisPage() {
         }, 300);
         return () => clearInterval(timer);
     }, [decodedInfluencer, imgCache]);
+    const hasSentiment    = sentiment && sentiment.totalComments > 0;
+    const brandVideos     = topVideos.filter(v => v.brand?.toLowerCase() === decodedBrand?.toLowerCase());
+    const totalVideos     = brandVideos.length;
+    const hasAnySample    = commentSamples.positive.length + commentSamples.negative.length + commentSamples.neutral.length > 0;
+
+    const chartData = useMemo(() => {
+        if (!brandVideos || brandVideos.length === 0) return [];
+        
+        // 1. เตรียมข้อมูลพื้นฐานและเรียงลำดับวันที่
+        const baseData = [...brandVideos]
+            .filter(v => v.publishedAt)
+            .sort((a, b) => new Date(a.publishedAt) - new Date(b.publishedAt))
+            .map(v => ({
+                date: new Date(v.publishedAt).toLocaleDateString('th-TH', { month: 'short', day: 'numeric' }),
+                views: v.totalViews || v.views || 0,
+                likes: v.totalLikes || 0,
+                comments: v.totalComments || 0,
+                title: v.title
+            }));
+
+        // 2. หาค่าสูงสุดของแต่ละประเภทในกลุ่มวิดีโอนี้ (เพื่อใช้เป็นฐาน 100%)
+        const maxViews = Math.max(...baseData.map(d => d.views), 1);
+        const maxLikes = Math.max(...baseData.map(d => d.likes), 1);
+        const maxComments = Math.max(...baseData.map(d => d.comments), 1);
+
+        // 3. คำนวณค่า Normalized (%) เพื่อให้กราฟแสดงผลในสเกลเดียวกัน (เทียบกันเอง)
+        return baseData.map(d => ({
+            ...d,
+            normViews: (d.views / maxViews) * 100,
+            normLikes: (d.likes / maxLikes) * 100,
+            normComments: (d.comments / maxComments) * 100
+        }));
+    }, [brandVideos]);
+
+    const analyzeVideo = useCallback(async (videoId, caption, title) => {
+        setAnalyzingVideos(prev => ({ ...prev, [videoId]: true }));
+        try {
+            const res = await fetch(`${API}/api/youtube/content-analysis/${videoId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ caption, title })
+            });
+            const data = await res.json();
+            if (data.hashtags) {
+                // อัปเดต contentAnalysis ใน state โดยตรง ไม่ต้อง reload หน้า
+                setContentAnalysis(prev => {
+                    const filtered = (prev || []).filter(a => a.videoId !== videoId);
+                    return [...filtered, { videoId, hashtags: data.hashtags, summary: data.summary }];
+                });
+            }
+        } catch (err) {
+            console.error('analyzeVideo error:', err);
+        } finally {
+            setAnalyzingVideos(prev => ({ ...prev, [videoId]: false }));
+        }
+    }, []);
 
     if (loading) {
         return (
@@ -224,11 +286,6 @@ function InfluencerAnalysisPage() {
             </div>
         );
     }
-
-    const hasSentiment    = sentiment && sentiment.totalComments > 0;
-    const brandVideos     = topVideos.filter(v => v.brand?.toLowerCase() === decodedBrand?.toLowerCase());
-    const totalVideos     = brandVideos.length;
-    const hasAnySample    = commentSamples.positive.length + commentSamples.negative.length + commentSamples.neutral.length > 0;
 
     return (
         <div style={styles.page}>
@@ -246,19 +303,67 @@ function InfluencerAnalysisPage() {
             <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px', marginBottom: '20px' }}>
                 
                 {/* ซ้ายกว้าง: Engagement Trend */}
-                <div style={{ ...styles.card, display: 'flex', flexDirection: 'column' }}>
+                <div style={{ ...styles.card, display: 'flex', flexDirection: 'column', minHeight: 400 }}>
                     <div style={styles.cardTitle}>
-                        <span>📈 Engagement Trend</span>
-                        <span style={styles.pendingTag}>รอผลวิเคราะห์</span>
+                        <span>📈 Engagement Trend (ตามวิดีโอที่โปรโมท)</span>
                     </div>
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 20px' }}>
-                        <div style={{ ...styles.chartPlaceholder, width: '100%', maxWidth: 400, height: 180 }}>
-                            <span style={{ fontSize: 40 }}>📊</span>
-                            <div style={{ fontSize: 14, color: '#ccc', marginTop: 12, fontFamily: "'Prompt', sans-serif" }}>กราฟ engagement ตามเวลา</div>
-                        </div>
-                        <div style={{ ...styles.placeholderNote, marginTop: 16 }}>
-                            แสดง views, likes, comments ของวิดีโอที่โปรโมทแบรนด์ตามลำดับเวลา
-                        </div>
+                    <div style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column' }}>
+                        {chartData.length > 0 ? (
+                            <>
+                                {/* 1. ส่วนแสดงกราฟ */}
+                                <div style={{ width: '100%', height: 350 }}>
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <ComposedChart data={chartData} margin={{ top: 20, right: 20, bottom: 20, left: 0 }}>
+                                            <defs>
+                                                <linearGradient id="colorViews" x1="0" y1="0" x2="0" y2="1">
+                                                    <stop offset="5%" stopColor={CHART_COLORS.views.stroke} stopOpacity={0.2}/>
+                                                    <stop offset="95%" stopColor={CHART_COLORS.views.stroke} stopOpacity={0}/>
+                                                </linearGradient>
+                                            </defs>
+                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                                            <XAxis dataKey="date" fontSize={11} tickMargin={12} axisLine={{ stroke: '#eee' }} tickLine={false} />
+                                            <YAxis yAxisId="left" orientation="left" stroke={CHART_COLORS.views.stroke} fontSize={11} tickFormatter={fmtNum} axisLine={false} tickLine={false} label={{ value: 'ยอดการเข้าชม (Views)', angle: -90, position: 'insideLeft', offset: 10, fill: CHART_COLORS.views.stroke }} />
+                                            <YAxis yAxisId="right" orientation="right" stroke={CHART_COLORS.likes.stroke} fontSize={11} tickFormatter={fmtNum} axisLine={false} tickLine={false} label={{ value: 'การตอบรับ (Engagement)', angle: 90, position: 'insideRight', offset: 10, dx:10, fill: CHART_COLORS.likes.stroke }} />
+                                            <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }} />
+                                            <Legend verticalAlign="top" align="center" height={36} iconType="circle" />
+                                            <Area yAxisId="left" type="monotone" dataKey="views" name="Views" stroke={CHART_COLORS.views.stroke} fill="url(#colorViews)" />
+                                            <Line yAxisId="right" type="monotone" dataKey="likes" name="Likes" stroke={CHART_COLORS.likes.stroke} />
+                                            <Line yAxisId="right" type="monotone" dataKey="comments" name="Comments" stroke={CHART_COLORS.comments.stroke} />
+                                        </ComposedChart>
+                                    </ResponsiveContainer>
+                                </div>
+
+                                {/* 2. ส่วนสรุปผลการวิเคราะห์ (รวมอยู่ใน Card เดียวกัน) */}
+                                <div style={{ 
+                                    marginTop: '20px', 
+                                    padding: '16px', 
+                                    backgroundColor: '#f8faff', 
+                                    borderRadius: '12px',
+                                    borderLeft: `5px solid ${CHART_COLORS.views.stroke}`,
+                                    fontFamily: "'Prompt', sans-serif"
+                                }}>
+                                    <h4 style={{ margin: '0 0 6px 0', color: '#2d3436', fontSize: '15px' }}>📊 สรุปภาพรวมข้อมูล</h4>
+                                    <p style={{ fontSize: '14px', color: '#636e72', lineHeight: '1.5', margin: 0 }}>
+                                        วิดีโอที่ได้รับความสนใจสูงสุดคือวันที่ {" "}
+                                        <span style={{ color: CHART_COLORS.views.stroke, fontWeight: 700 }}>
+                                            {chartData.reduce((prev, current) => (prev.views > current.views) ? prev : current).date}
+                                        </span> 
+                                        {" "} โดยมีค่าเฉลี่ย Engagement ต่อการเข้าชมประมาณ {" "}
+                                        <strong>
+                                            { (chartData.reduce((a, b) => a + b.likes, 0) / chartData.reduce((a, b) => a + b.views, 0) * 100).toFixed(2) }%
+                                        </strong>
+                                        <br />
+                                        <span style={{ fontSize: '12px', color: '#999' }}>
+                                            * วิเคราะห์จากความสัมพันธ์ระหว่างยอดรับชมและการมีส่วนร่วมในแต่ละช่วงเวลา
+                                        </span>
+                                    </p>
+                                </div>
+                            </>
+                        ) : (
+                            <div style={{ textAlign: 'center', color: '#ccc', paddingTop: 100 }}>
+                                ไม่มีข้อมูลวันที่เผยแพร่สำหรับการสร้างกราฟ
+                            </div>
+                        )}
                     </div>
                 </div>
 
@@ -287,6 +392,37 @@ function InfluencerAnalysisPage() {
                         <StatCard icon="🎬" label="วิดีโอที่โปรโมท" value={totalVideos > 0 ? totalVideos : '-'} color={PLATFORM_COLOR} />
                         <StatCard icon="💬" label="คอมเม้นที่วิเคราะห์" value={hasSentiment ? fmtNum(sentiment.totalComments) : '-'} color="#00b894" />
                     </div>
+
+                    {/* ✅ เพิ่มปุ่ม View Channel ใต้ badge */}
+                    {ytInfo?.channelId && (
+                        <a  
+                            href={`https://www.youtube.com/channel/${ytInfo.channelId}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{
+                                marginTop: 10,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: 6,
+                                padding: '10px 28px',
+                                borderRadius: 50,
+                                background: PLATFORM_COLOR,
+                                color: '#fff',
+                                fontSize: 13,
+                                fontWeight: 700,
+                                textDecoration: 'none',
+                                fontFamily: "'Prompt', sans-serif",
+                                letterSpacing: '0.3px',
+                                transition: 'background 0.2s',
+                                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+                            }}
+                            onMouseOver={e => e.currentTarget.style.background = '#aa0000'}
+                            onMouseOut={e => e.currentTarget.style.background = PLATFORM_COLOR}
+                        >
+                            View Channel
+                        </a>
+                    )}
                 </div>
             </div>
 
@@ -320,8 +456,8 @@ function InfluencerAnalysisPage() {
                         <div style={{ marginTop: 12, padding: '12px', background: '#fafafa', borderRadius: 10, display: 'flex', justifyContent: 'space-between' }}>
                             {[
                                 { label: '😊 บวก', val: sentiment.positive },
-                                { label: '😐 กลาง', val: sentiment.neutral },
                                 { label: '😞 ลบ',  val: sentiment.negative },
+                                { label: '😐 กลาง', val: sentiment.neutral },
                             ].map(s => (
                                 <div key={s.label} style={{ textAlign: 'center' }}>
                                     <div style={{ fontSize: 14, fontWeight: 700, color: '#2d3436' }}>{s.val.count.toLocaleString()}</div>
@@ -429,6 +565,7 @@ function InfluencerAnalysisPage() {
 
                                                 <div style={{ fontSize: '13px', color: '#666', marginBottom: '16px', display: 'flex', gap: '16px', alignItems: 'center' }}>
                                                     <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>👁️ {fmtNum(v.totalViews || v.views)} views</span>
+                                                    <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>👍 {fmtNum(v.totalLikes)} likes</span>
                                                     {v.publishedAt && <span>📅 {new Date(v.publishedAt).toLocaleDateString('th-TH', { year: 'numeric', month: 'short', day: 'numeric' })}</span>}
                                                 </div>
 
@@ -436,34 +573,51 @@ function InfluencerAnalysisPage() {
                                                 <div style={{ background: '#f8f9fa', padding: '14px', borderRadius: '10px', border: '1px solid #f0f0f0' }}>
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                                                         <span style={{ fontSize: 13, fontWeight: 700, color: '#2d3436' }}>📝 สรุปเนื้อหา</span>
-                                                        {analysis ? (
-                                                        <span style={{ ...styles.pendingTag, background: '#eafaf5', color: '#00b894' }}>
-                                                            วิเคราะห์แล้ว {analysis.cached ? '(Cache)' : ''}
-                                                        </span>
-                                                        ) : (
-                                                        <span style={styles.pendingTag}>รอผลวิเคราะห์</span>
-                                                        )}
+                                                        {analysis
+                                                            ? <span style={{ ...styles.pendingTag, background: '#eafaf5', color: '#00b894' }}>วิเคราะห์แล้ว</span>
+                                                            : <span style={styles.pendingTag}>ยังไม่ได้วิเคราะห์</span>
+                                                        }
                                                     </div>
-                                                    
+
                                                     {contentLoading ? (
-                                                        <div style={{ color: '#ccc', fontSize: 13 }}>กำลังวิเคราะห์...</div>
+                                                        <div style={{ color: '#ccc', fontSize: 13 }}>กำลังโหลด...</div>
                                                     ) : analysis ? (
+                                                        // ✅ มีข้อมูลแล้ว — แสดงปกติ
                                                         <div>
-                                                        {analysis.summary && (
-                                                            <div style={{ fontSize: 13, color: '#555', lineHeight: 1.6, marginBottom: 16 }}>
-                                                            {analysis.summary}
+                                                            {analysis.summary && (
+                                                                <div style={{ fontSize: 13, color: '#555', lineHeight: 1.6, marginBottom: 12 }}>
+                                                                    {analysis.summary}
+                                                                </div>
+                                                            )}
+                                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                                                {analysis.hashtags?.map((tag, idx) => (
+                                                                    <span key={idx} style={styles.tagStyle}>{tag}</span>
+                                                                ))}
                                                             </div>
-                                                        )}
-                                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                                                            {analysis.hashtags?.map((tag, idx) => (
-                                                            <span key={idx} style={{ ...styles.tagStyle }}>
-                                                                {tag}
-                                                            </span>
-                                                            ))}
-                                                        </div>
                                                         </div>
                                                     ) : (
-                                                        <div style={{ color: '#999', fontSize: 13 }}>ไม่พบข้อมูลวิเคราะห์สำหรับคลิปนี้</div>
+                                                        // ✅ ยังไม่มี — แสดงปุ่ม
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                                            <span style={{ fontSize: 13, color: '#999' }}>ยังไม่มีข้อมูลสรุปเนื้อหา</span>
+                                                            <button
+                                                                onClick={() => analyzeVideo(v.videoId, v.caption, v.title)}
+                                                                disabled={analyzingVideos[v.videoId]}
+                                                                style={{
+                                                                    padding: '7px 16px',
+                                                                    borderRadius: 8,
+                                                                    background: analyzingVideos[v.videoId] ? '#f0f0f0' : '#1a1a2e',
+                                                                    color: analyzingVideos[v.videoId] ? '#aaa' : '#fff',
+                                                                    border: 'none',
+                                                                    fontSize: 12,
+                                                                    fontWeight: 700,
+                                                                    cursor: analyzingVideos[v.videoId] ? 'not-allowed' : 'pointer',
+                                                                    fontFamily: "'Prompt', sans-serif",
+                                                                    whiteSpace: 'nowrap'
+                                                                }}
+                                                            >
+                                                                {analyzingVideos[v.videoId] ? '⏳ กำลังวิเคราะห์...' : '🔍 วิเคราะห์เนื้อหา'}
+                                                            </button>
+                                                        </div>
                                                     )}
                                                 </div>
                                             </div>

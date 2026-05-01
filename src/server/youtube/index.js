@@ -114,7 +114,6 @@ app.post("/api/youtube/search-channel", async (req, res) => {
                         channelId: v.channelId,
                         platform: "youtube",
                         text: c.text,
-                        likeCount: c.likeCount || null,
                         sentiment: null,
                         confidence: null,
                     }));
@@ -178,6 +177,7 @@ app.post("/api/youtube/search-channel", async (req, res) => {
                   title: v.title,
                   caption: v.caption ?? "None",
                   url: v.url,
+                  publishedAt: v.publishedAt ?? null,
                   totalViews: parseInt(v.totalViews) || 0,
                   totalLikes: parseInt(v.totalLikes) || 0,
                   totalComments: parseInt(v.totalComments) || 0,
@@ -186,8 +186,7 @@ app.post("/api/youtube/search-channel", async (req, res) => {
                   category: finalAnalysis.category,
                   hasTranscript: !!transcript,
                   lastUpdate: new Date(),
-                },
-                $addToSet: { comments: { $each: v.comments || [] } },
+                }
               },
               { upsert: true }
             );
@@ -205,7 +204,6 @@ app.post("/api/youtube/search-channel", async (req, res) => {
                 channelId: v.channelId,
                 platform: "youtube",
                 text: c.text,
-                likeCount: c.likeCount || null,
                 sentiment: null,
                 confidence: null,
               }));
@@ -301,7 +299,7 @@ app.post("/api/youtube/migrate-comments", async (req, res) => {
           channelId: v.channelId,
           platform: "youtube",
           text: c.text,
-          likeCount: c.likeCount || null,
+          //likeCount: c.likeCount || null,
           sentiment: null,
           confidence: null,
         }));
@@ -403,6 +401,99 @@ app.post("/api/youtube/analyze-sentiment", async (req, res) => {
 });
 
 // ─── วิเคราะห์ hashtag ด้วย Gemini ───
+// app.get("/api/youtube/content-analysis", async (req, res) => {
+//   const { influencerName, brand } = req.query;
+//   if (!influencerName || !brand)
+//     return res.status(400).json({ error: "influencerName and brand are required" });
+
+//   const client = new MongoClient(CONFIG.uri);
+//   try {
+//     await client.connect();
+//     const db = client.db(CONFIG.db);
+//     const youtuberCol = db.collection("youtuber");
+//     const transcriptCol = db.collection("transcripts");
+
+//     // 1. ค้นหาวิดีโอทั้งหมด
+//     const videos = await youtuberCol.find({
+//       authorName: new RegExp(`^${influencerName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"),
+//       brand: new RegExp(`^${brand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"),
+//       platform: "youtube"
+//     }).toArray();
+
+//     if (videos.length === 0)
+//       return res.json({ results: [], videoCount: 0 });
+
+//     const finalData = [];
+
+//     // 2. ใช้ for...of เพื่อประมวลผลทีละคลิป (Sequential)
+//     for (const v of videos) {
+//       console.log(`🔍 Processing video: ${v.videoId} - ${v.title}`);
+
+//       // เช็คใน DB (Cache)
+//       let transcriptDoc = await transcriptCol.findOne({ videoId: v.videoId });
+
+//       if (transcriptDoc?.hashtags?.length) {
+//         console.log(`✅ Using cached data for video: ${v.videoId} - ${v.title}`);
+//         finalData.push({
+//           videoId: v.videoId,
+//           title: v.title,
+//           hashtags: transcriptDoc.hashtags,
+//           summary: transcriptDoc.summary || "",
+//           cached: true
+//         });
+//         continue; // ข้ามไปคลิปถัดไปทันที
+//       }
+
+//       // ถ้าไม่มี Cache -> เรียก Gemini วิเคราะห์
+//       try {
+//         const analysis = await analyzeHashtags(
+//           transcriptDoc?.transcript,
+//           v.caption,
+//           v.title
+//         );
+
+//         if (analysis) {
+//           console.log(`✅ Analyzed and saved hashtags for video: ${v.videoId} - ${v.title}`);
+//           await transcriptCol.updateOne(
+//             { videoId: v.videoId },
+//             {
+//               $set: {
+//                 hashtags: analysis.hashtags || [],
+//                 summary: analysis.summary || "",
+//                 analysisUpdatedAt: new Date(),
+//               },
+//             },
+//             { upsert: true }
+//           );
+
+//           finalData.push({
+//             videoId: v.videoId,
+//             title: v.title,
+//             hashtags: analysis.hashtags || [],
+//             summary: analysis.summary || "",
+//             cached: false
+//           });
+//         }
+//       } catch (apiErr) {
+//         console.error(`❌ Error analyzing ${v.videoId}:`, apiErr.message);
+//         // ในกรณีที่ตัวใดตัวหนึ่งพัง เราอาจจะเลือก push ข้อมูลเปล่าหรือข้ามไปเลยก็ได้
+//       }
+//     }
+
+//     res.json({
+//       videoCount: videos.length,
+//       analyzedCount: finalData.length,
+//       results: finalData
+//     });
+
+//   } catch (err) {
+//     console.error("content-analysis error:", err.message);
+//     res.status(500).json({ error: err.message });
+//   } finally {
+//     await client.close();
+//   }
+// });
+// GET — แสดงเฉพาะที่วิเคราะห์แล้ว (ไม่เรียก Gemini)
 app.get("/api/youtube/content-analysis", async (req, res) => {
   const { influencerName, brand } = req.query;
   if (!influencerName || !brand)
@@ -412,84 +503,133 @@ app.get("/api/youtube/content-analysis", async (req, res) => {
   try {
     await client.connect();
     const db = client.db(CONFIG.db);
-    const youtuberCol = db.collection("youtuber");
+    const youtuberCol   = db.collection("youtuber");
     const transcriptCol = db.collection("transcripts");
+
+    const videos = await youtuberCol.find({
+      authorName: new RegExp(`^${influencerName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"),
+      brand:      new RegExp(`^${brand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"),
+      platform: "youtube"
+    }).toArray();
+
+    if (videos.length === 0) return res.json({ results: [], videoCount: 0 });
+
+    const finalData = [];
+    for (const v of videos) {
+      const transcriptDoc = await transcriptCol.findOne({ videoId: v.videoId });
+      // ✅ แค่ดึงที่มีอยู่แล้ว ไม่วิเคราะห์ใหม่
+      if (transcriptDoc?.hashtags?.length) {
+        finalData.push({
+          videoId:  v.videoId,
+          title:    v.title,
+          hashtags: transcriptDoc.hashtags,
+          summary:  transcriptDoc.summary || "",
+          cached:   true
+        });
+      }
+      // ถ้าไม่มี → ไม่ push เลย (frontend จะรู้ว่ายังไม่ได้วิเคราะห์)
+    }
+
+    res.json({ videoCount: videos.length, analyzedCount: finalData.length, results: finalData });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    await client.close();
+  }
+});
+
+// POST — วิเคราะห์เฉพาะคลิปที่กดปุ่ม
+app.post("/api/youtube/content-analysis/:videoId", async (req, res) => {
+  const { videoId } = req.params;
+  const { caption, title } = req.body;
+
+  const client = new MongoClient(CONFIG.uri);
+  try {
+    await client.connect();
+    const transcriptCol = client.db(CONFIG.db).collection("transcripts");
+
+    // เช็ค cache ก่อน
+    const existing = await transcriptCol.findOne({ videoId });
+    if (existing?.hashtags?.length) {
+      return res.json({
+        videoId,
+        hashtags: existing.hashtags,
+        summary:  existing.summary || "",
+        cached:   true
+      });
+    }
+
+    // เรียก Gemini วิเคราะห์
+    const analysis = await analyzeHashtags(existing?.transcript, caption, title);
+    if (!analysis) return res.status(500).json({ error: "วิเคราะห์ไม่สำเร็จ" });
+
+    await transcriptCol.updateOne(
+      { videoId },
+      { $set: { hashtags: analysis.hashtags || [], summary: analysis.summary || "", analysisUpdatedAt: new Date() } },
+      { upsert: true }
+    );
+
+    res.json({ videoId, hashtags: analysis.hashtags || [], summary: analysis.summary || "", cached: false });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    await client.close();
+  }
+});
+
+app.get("/api/youtube/engagement-trend", async (req, res) => {
+  const { influencerName, brand } = req.query;
+  if (!influencerName || !brand)
+    return res.status(400).json({ error: "influencerName and brand are required" });
+
+  const client = new MongoClient(CONFIG.uri);
+  try {
+    await client.connect();
+    const db = client.db(CONFIG.db);
+    const youtuberCol = db.collection("youtuber");
 
     // 1. ค้นหาวิดีโอทั้งหมด
     const videos = await youtuberCol.find({
       authorName: new RegExp(`^${influencerName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"),
       brand: new RegExp(`^${brand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"),
       platform: "youtube"
-    }).toArray();
+    }).sort({ publishedAt: 1 }) // เรียงจากเก่าไปใหม่เพื่อดู Trend
+      .toArray();
 
-    if (videos.length === 0)
-      return res.json({ results: [], videoCount: 0 });
+    // 2. แปรรูปข้อมูลสำหรับทำกราฟ
+    const chartData = videos.map(v => {
+      const views = parseInt(v.totalViews || v.views || 0);
+      const likes = parseInt(v.totalLikes || v.likes || 0);
+      const comments = parseInt(v.totalComments || v.comments || 0);
+      
+      // คำนวณ Engagement Rate (%)
+      const engagementRate = views > 0 
+        ? ((likes + comments) / views) * 100 
+        : 0;
 
-    const finalData = [];
-
-    // 2. ใช้ for...of เพื่อประมวลผลทีละคลิป (Sequential)
-    for (const v of videos) {
-      console.log(`🔍 Processing video: ${v.videoId} - ${v.title}`);
-
-      // เช็คใน DB (Cache)
-      let transcriptDoc = await transcriptCol.findOne({ videoId: v.videoId });
-
-      if (transcriptDoc?.hashtags?.length) {
-        finalData.push({
-          videoId: v.videoId,
-          title: v.title,
-          hashtags: transcriptDoc.hashtags,
-          summary: transcriptDoc.summary || "",
-          cached: true
-        });
-        console.log(`✅ Using cached data for video: ${v.videoId} - ${v.title}`);
-        continue; // ข้ามไปคลิปถัดไปทันที
-      }
-
-      // ถ้าไม่มี Cache -> เรียก Gemini วิเคราะห์
-      try {
-        const analysis = await analyzeHashtags(
-          transcriptDoc?.transcript,
-          v.caption,
-          v.title
-        );
-
-        if (analysis) {
-          await transcriptCol.updateOne(
-            { videoId: v.videoId },
-            {
-              $set: {
-                hashtags: analysis.hashtags || [],
-                summary: analysis.summary || "",
-                analysisUpdatedAt: new Date(),
-              },
-            },
-            { upsert: true }
-          );
-
-          finalData.push({
-            videoId: v.videoId,
-            title: v.title,
-            hashtags: analysis.hashtags || [],
-            summary: analysis.summary || "",
-            cached: false
-          });
-          console.log(`✅ Analyzed and saved hashtags for video: ${v.videoId} - ${v.title}`);
-        }
-      } catch (apiErr) {
-        console.error(`❌ Error analyzing ${v.videoId}:`, apiErr.message);
-        // ในกรณีที่ตัวใดตัวหนึ่งพัง เราอาจจะเลือก push ข้อมูลเปล่าหรือข้ามไปเลยก็ได้
-      }
-    }
+      return {
+        videoId: v.videoId,
+        title: v.title,
+        date: v.publishedAt, // ใช้สำหรับแกน X
+        views: views,        // สำหรับกราฟแท่ง
+        engagementRate: parseFloat(engagementRate.toFixed(2)), // สำหรับกราฟเส้น
+        displayDate: new Date(v.publishedAt).toLocaleDateString('th-TH', {
+            day: '2-digit',
+            month: 'short'
+        })
+      };
+    });
 
     res.json({
-      videoCount: videos.length,
-      analyzedCount: finalData.length,
-      results: finalData
+      success: true,
+      data: chartData,
+      summary: {
+        avgEngagement: (chartData.reduce((acc, curr) => acc + curr.engagementRate, 0) / chartData.length).toFixed(2),
+        totalBrandVideos: chartData.length
+      }
     });
 
   } catch (err) {
-    console.error("content-analysis error:", err.message);
     res.status(500).json({ error: err.message });
   } finally {
     await client.close();

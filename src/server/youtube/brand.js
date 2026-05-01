@@ -1,5 +1,21 @@
-const { execFile } = require("child_process");
+const { execFile, execSync  } = require("child_process");
 const path = require("path");
+
+function getPythonCmd() {
+  try {
+    // Windows: ดึง path เต็มจาก where
+    const result = execSync("where python", { encoding: "utf8" });
+    const lines = result.trim().split("\n");
+    // เอาบรรทัดแรกที่ได้
+    const fullPath = lines[0].trim();
+    console.log("🐍 Using Python:", fullPath);
+    return fullPath;
+  } catch {
+    return "python"; // fallback
+  }
+}
+
+const PYTHON_CMD = getPythonCmd();
 
 function analyzeVideo(url, title = "None", description = "None", brandList = []) {
   const brandListArg = JSON.stringify(brandList);
@@ -15,7 +31,7 @@ function analyzeVideo(url, title = "None", description = "None", brandList = [])
 
   return new Promise((resolve, reject) => {
     execFile(
-      "python",
+      PYTHON_CMD,
       [scriptPath, url, brandListArg, title, description],
       options,
       (error, stdout, stderr) => {

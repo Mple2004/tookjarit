@@ -93,7 +93,7 @@ async function ChannelVideos({ channelId = null, search = null, max = 5 }) {
       const commentRes = await youtube.commentThreads.list({
         part: "snippet",
         videoId: v.id,
-        maxResults: 3, // ดึงแค่ 3 คอมเมนต์
+        maxResults: 10, 
         order: "relevance" // เอาคอมเมนต์ที่เกี่ยวข้องหรือเด่นที่สุด
       });
 
@@ -116,9 +116,11 @@ async function ChannelVideos({ channelId = null, search = null, max = 5 }) {
         title: v.snippet?.title ?? "None",
         caption: v.snippet?.description ?? "None",
         url: `https://www.youtube.com/watch?v=${v.id}`,
+        publishedAt: v.snippet?.publishedAt ?? null,
         totalViews: v.statistics.viewCount || 0,
         totalLikes: v.statistics.likeCount || 0,
-        totalComments: v.statistics.commentCount || 0
+        totalComments: v.statistics.commentCount || 0,
+        comments: topComments
       };
     }));
 }

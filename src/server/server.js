@@ -357,6 +357,19 @@ app.get("/api/youtube/content-analysis", async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+// POST /api/youtube/content-analysis/:videoId → YouTube service
+app.post('/api/youtube/content-analysis/:videoId', async (req, res) => {
+    try {
+        const response = await axios.post(
+            `${YOUTUBE_SERVICE}/api/youtube/content-analysis/${req.params.videoId}`,
+            req.body,
+            { timeout: 60000 }
+        );
+        res.json(response.data);
+    } catch (err) {
+        res.status(err.response?.status || 500).json({ error: err.response?.data?.error || err.message });
+    }
+});
 
 // POST /api/youtube-sync-neo4j  →  YouTube service: POST /api/youtube/sync-neo4j
 app.post('/api/youtube-sync-neo4j', authMiddleware, async (req, res) => {
