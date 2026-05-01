@@ -4,7 +4,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { CATEGORY_COLOR_MAP } from '../constants/categories';
 import { useAvatarCache } from '../hooks/useAvatarCache';
 
-const API = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+const API = process.env.REACT_APP_API_URL;
 const PLATFORM_COLOR = '#cc0000';
 
 function fmtNum(n) {

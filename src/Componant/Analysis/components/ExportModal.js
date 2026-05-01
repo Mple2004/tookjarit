@@ -2,9 +2,16 @@
 import React, { useState } from 'react';
 const API = process.env.REACT_APP_API_URL
 const CATEGORIES = [
-    'Fashion', 'Beauty & Personal Care', 'Health & Wellness',
-    'Food & Beverage', 'Mom & Kids', 'IT & Gadgets',
-    'Home & Living', 'Toys & Collectibles', 'Pet', 'Automotive', 'Lifestyle'
+    'Fashion',
+    'Beauty & Personal Care',
+    'Health & Wellness',
+    'Food & Beverage',
+    'Mom & Kids',
+    'IT & Gadgets',
+    'Home & Living',
+    'Toys & Collectibles',
+    'Pet', 'Automotive', 
+    'Lifestyle'
 ];
 
 function ExportModal({ isOpen, onClose, currentPlatform }) {

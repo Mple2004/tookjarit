@@ -1,6 +1,7 @@
 import React from 'react';
 import { CATEGORIES } from '../constants/categories';
 
+//component declaration
 function CategoryLegend({ selectedCategory, setSelectedCategory, fgRef }) {
     const handleClick = (name) => {
         if (selectedCategory === name) {
@@ -13,16 +14,22 @@ function CategoryLegend({ selectedCategory, setSelectedCategory, fgRef }) {
 
     return (
         <div className="color-legend-section">
+            // Header with icon and title
             <div className="legend-header">
                 <i className="fi fi-rr-palette"></i>
                 <span>คำอธิบายสี (Color Legend)</span>
                 <small>คลิกเพื่อกรองตามหมวดหมู่</small>
             </div>
+
             <div className="legend-grid">
                 {CATEGORIES.map((cat, i) => (
                     <div key={i} className="legend-item"
                         onClick={() => handleClick(cat.name)}
-                        style={{ opacity: selectedCategory && selectedCategory !== cat.name ? 0.4 : 1, cursor: 'pointer', transition: 'all 0.3s ease' }}
+                        style={{ 
+                            opacity: selectedCategory && selectedCategory !== cat.name ? 0.4 : 1, 
+                            cursor: 'pointer', 
+                            transition: 'all 0.3s ease' 
+                        }}
                     >
                         <div className="legend-color-box" style={{
                             background: cat.color,
