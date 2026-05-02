@@ -60,9 +60,10 @@ def analyze_text_only(title, description):
     วิเคราะห์เฉพาะจากข้อความเท่านั้น
 
     กฎ:
+    - ถ้าเจอชื่อย่อ ชื่อเล่น หรือชื่อไม่เป็นทางการ ให้ normalize เป็นชื่อแบรนด์ทางการเต็มๆ
+    - ถ้าไม่แน่ใจว่าเป็นแบรนด์อะไร ให้ใช้ชื่อที่ปรากฏในข้อความตามจริง
     - ถ้ามี brand → ใส่ brand และ categoryจากรายการ แล้วให้ productType = ชื่อสินค้าหรือชนิดสินค้าที่ใกล้เคียงที่สุด
-    - ถ้ามีสินค้าแต่ไม่มี brand → brand = "No Brand" category = "No Brand" แล้วให้ productType = ชื่อสินค้า
-    - ถ้าไม่มีอะไรเลย → brand → brand = "No Brand" category = "No Brand"
+    - ถ้ามีสินค้าแต่ไม่มีbrandหรือไม่มีอะไรเลย → brand = "No Brand" category = "No Brand" แล้วให้ productType = ชื่อสินค้า/No Brand
 
     category ต้องเลือกเพียง 1 ประเภทจากรายการนี้เท่านั้น:
     - Fashion (Clothing, Vintage, Oversize, Streetwear, Watches, Jewelry)
@@ -110,6 +111,12 @@ def analyze_video(url):
                 },
                 """
                 วิเคราะห์วิดีโอ หา brand / productType / category
+                กฎ:
+                - ถ้าเจอชื่อย่อ ชื่อเล่น หรือชื่อไม่เป็นทางการ ให้ normalize เป็นชื่อแบรนด์ทางการเต็มๆ
+                - ถ้าไม่แน่ใจว่าเป็นแบรนด์อะไร ให้ใช้ชื่อที่ปรากฏในข้อความตามจริง
+                - ถ้ามี brand → ใส่ brand และ categoryจากรายการ แล้วให้ productType = ชื่อสินค้าหรือชนิดสินค้าที่ใกล้เคียงที่สุด
+                - ถ้ามีสินค้าแต่ไม่มีbrandหรือไม่มีอะไรเลย → brand = "No Brand" category = "No Brand" แล้วให้ productType = ชื่อสินค้า/No Brand
+
                 category ต้องเลือกเพียง 1 ประเภทจากรายการนี้เท่านั้น:
                 - Fashion (Clothing, Vintage, Oversize, Streetwear, Watches, Jewelry)
                 - Beauty & Personal Care (Skincare, Makeup, Perfume, Shampoo, Soap, Toothpaste)
@@ -123,10 +130,6 @@ def analyze_video(url):
                 - Automotive (Car Accessories, Care products)
                 - Lifestyle (DIY, Handmade, Travel, Vlog, Daily Life, Random stuff)
                 - No Brand (ถ้าไม่มี brand)
-
-                ถ้าไม่มี brandแต่มีสินค้า:
-                - ให้ brand = "No Brand" และ productType = ชื่อสินค้า category = "No Brand"
-                - ถ้าไม่มีอะไรเลย brand = "No Brand" category = "No Brand"
 
                 ตอบ JSON:
                 {"brand": null, "productType": null, "category": null}

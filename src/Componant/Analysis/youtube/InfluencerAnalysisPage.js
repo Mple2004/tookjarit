@@ -136,6 +136,13 @@ function CommentSampleRow({ label, color, bg, comments }) {
     );
 }
 
+const getEngagementLabel = (rate) => {
+    if (rate >= 5) return { text: "Excellent", color: "#6c5ce7" };
+    if (rate >= 2) return { text: "High Loyalty", color: "#00b894" };
+    if (rate < 0.5) return { text: "Viral", color: "#0984e3" };
+    return { text: "Standard", color: "#636e72" };
+};
+
 function InfluencerAnalysisPage() {
     const { brandName, influencerName } = useParams();
     const navigate = useNavigate();
@@ -154,6 +161,7 @@ function InfluencerAnalysisPage() {
     const [contentAnalysis, setContentAnalysis] = useState(null);
     const [contentLoading, setContentLoading]   = useState(false);
     const [analyzingVideos, setAnalyzingVideos] = useState({}); // { videoId: true/false }
+    const [activeTooltip, setActiveTooltip] = useState(null);
 
     const [commentSamples, setCommentSamples] = useState({ positive: [], negative: [], neutral: [] });
 
@@ -278,6 +286,29 @@ function InfluencerAnalysisPage() {
         }
     }, []);
 
+    const CustomTooltip = ({ active, payload, label }) => {
+        if (!active || !payload || !payload.length) return null;
+
+        // หา item ที่ตรงกับ series ที่ mouse อยู่
+        const item = payload.find(p => p.name === activeTooltip) || payload[0];
+
+        return (
+            <div style={{
+                background: '#fff',
+                borderRadius: 12,
+                padding: '10px 16px',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+                fontFamily: "'Prompt', sans-serif",
+            }}>
+                <div style={{ fontSize: 12, color: '#999', marginBottom: 6 }}>{label}</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: item.color }}>
+                    {item.name} : {fmtNum(item.value)}
+                </div>
+            </div>
+        );
+    };
+    
+
     if (loading) {
         return (
             <div style={styles.loadingWrap}>
@@ -324,11 +355,11 @@ function InfluencerAnalysisPage() {
                                             <XAxis dataKey="date" fontSize={11} tickMargin={12} axisLine={{ stroke: '#eee' }} tickLine={false} />
                                             <YAxis yAxisId="left" orientation="left" stroke={CHART_COLORS.views.stroke} fontSize={11} tickFormatter={fmtNum} axisLine={false} tickLine={false} label={{ value: 'ยอดการเข้าชม (Views)', angle: -90, position: 'insideLeft', offset: 10, fill: CHART_COLORS.views.stroke }} />
                                             <YAxis yAxisId="right" orientation="right" stroke={CHART_COLORS.likes.stroke} fontSize={11} tickFormatter={fmtNum} axisLine={false} tickLine={false} label={{ value: 'การตอบรับ (Engagement)', angle: 90, position: 'insideRight', offset: 10, dx:10, fill: CHART_COLORS.likes.stroke }} />
-                                            <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' }} />
+                                            <Tooltip content={<CustomTooltip />} />
                                             <Legend verticalAlign="top" align="center" height={36} iconType="circle" />
-                                            <Area yAxisId="left" type="monotone" dataKey="views" name="Views" stroke={CHART_COLORS.views.stroke} fill="url(#colorViews)" />
-                                            <Line yAxisId="right" type="monotone" dataKey="likes" name="Likes" stroke={CHART_COLORS.likes.stroke} />
-                                            <Line yAxisId="right" type="monotone" dataKey="comments" name="Comments" stroke={CHART_COLORS.comments.stroke} />
+                                            <Line yAxisId="left" type="monotone" dataKey="views" name="Views" stroke={CHART_COLORS.views.stroke} fill="url(#colorViews)" onMouseEnter={() => setActiveTooltip('Views')} />
+                                            <Line yAxisId="right" type="monotone" dataKey={(v) => v.likes + v.comments} name="Engagement" stroke={CHART_COLORS.likes.stroke} onMouseEnter={() => setActiveTooltip('Engagement')} />
+                                            {/*<Line yAxisId="right" type="monotone" dataKey="comments" name="Comments" stroke={CHART_COLORS.comments.stroke} />*/}
                                         </ComposedChart>
                                     </ResponsiveContainer>
                                 </div>
@@ -343,20 +374,35 @@ function InfluencerAnalysisPage() {
                                     fontFamily: "'Prompt', sans-serif"
                                 }}>
                                     <h4 style={{ margin: '0 0 6px 0', color: '#2d3436', fontSize: '15px' }}>📊 สรุปภาพรวมข้อมูล</h4>
-                                    <p style={{ fontSize: '14px', color: '#636e72', lineHeight: '1.5', margin: 0 }}>
-                                        วิดีโอที่ได้รับความสนใจสูงสุดคือวันที่ {" "}
-                                        <span style={{ color: CHART_COLORS.views.stroke, fontWeight: 700 }}>
-                                            {chartData.reduce((prev, current) => (prev.views > current.views) ? prev : current).date}
-                                        </span> 
-                                        {" "} โดยมีค่าเฉลี่ย Engagement ต่อการเข้าชมประมาณ {" "}
-                                        <strong>
-                                            { (chartData.reduce((a, b) => a + b.likes, 0) / chartData.reduce((a, b) => a + b.views, 0) * 100).toFixed(2) }%
-                                        </strong>
-                                        <br />
-                                        <span style={{ fontSize: '12px', color: '#999' }}>
-                                            * วิเคราะห์จากความสัมพันธ์ระหว่างยอดรับชมและการมีส่วนร่วมในแต่ละช่วงเวลา
-                                        </span>
-                                    </p>
+                                    {/* --- ส่วนที่เพิ่มใหม่ --- */}
+                                    {(() => {
+                                        // คำนวณ Rate ภาพรวม
+                                        const totalViews = chartData.reduce((a, b) => a + b.views, 0);
+                                        const totalEngagements = chartData.reduce((a, b) => a + (b.likes + b.comments), 0);
+                                        const currentRate = totalViews > 0 ? (totalEngagements / totalViews) * 100 : 0;
+                                        
+                                        // ดึง Label และ สี ตามเงื่อนไข
+                                        const labelInfo = getEngagementLabel(currentRate);
+
+                                        return (
+                                            <p style={{ fontSize: '14px', color: '#636e72', lineHeight: '1.5', margin: 0 }}>
+                                                วิดีโอที่ได้รับความสนใจสูงสุดคือวันที่ {" "}
+                                                <span style={{ color: CHART_COLORS.views.stroke, fontWeight: 700 }}>
+                                                    {chartData.reduce((prev, current) => (prev.views > current.views) ? prev : current).date}
+                                                </span> 
+                                                {" "} โดยมีค่าเฉลี่ย Engagement ประมาณ {" "}
+                                                <strong style={{ color: '#2d3436' }}>{currentRate.toFixed(2)}%</strong>
+                                                
+                                                {" "} ระดับประสิทธิภาพ: {" "}
+                                                <strong style={{ color: '#2d3436'}}>{labelInfo.text}</strong>
+                                            </p>
+                                        );
+                                    })()}
+                                    {/* ---------------------- */}
+                                    
+                                    <span style={{ fontSize: '12px', color: '#999' }}>
+                                        * วิเคราะห์จากความสัมพันธ์ระหว่างยอดรับชมและการมีส่วนร่วมในแต่ละช่วงเวลา
+                                    </span>
                                 </div>
                             </>
                         ) : (
